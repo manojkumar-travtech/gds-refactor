@@ -1,0 +1,113 @@
+# =========================
+# Node.js
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =========================
+# Build Output
+# =========================
+dist/
+build/
+out/
+coverage/
+
+# =========================
+# TypeScript
+# =========================
+*.tsbuildinfo
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / Editor Files
+# =========================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# =========================
+# Test Artifacts
+# =========================
+junit.xml
+test-results/
+playwright-report/
+.nyc_output/
+
+# =========================
+# Cache / Temp
+# =========================
+.cache/
+.tmp/
+.temp/
+*.swp
+*.swo
+
+# =========================
+# Docker
+# =========================
+.docker/
+docker-data/
+
+# =========================
+# Secrets & Certificates
+# =========================
+*.pem
+*.key
+*.crt
+*.pfx
+*.jks
+
+# =========================
+# Local Config Overrides
+# =========================
+config/local.*
+config/*.local.*
+
+# =========================
+# Runtime Files
+# =========================
+*.pid
+*.seed
+*.pid.lock
+
+# =========================
+# Sabre / SOAP Debug Dumps (if any)
+# =========================
+soap-logs/
+queue-dumps/
+sabre-dumps/
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.old
+*.tmp
