@@ -1,13 +1,14 @@
 import { v4 as uuidv4 } from "uuid";
-import logger from "../utils/logger";
-import { getClient, PoolClient } from "../config/database";
-import { parseSabreDateTime } from "../connectors/helpers/parseSabreDateTime";
-import { HotelData, HotelSegment } from "../types/hotelDetails.types";
-import { CarRentalData, CarRentalSegment } from "../types/carDetails.types";
+import { PnrExtractionResult } from "../../../connectors/helpers/otherHelpers";
+import logger from "../../../utils/logger";
+import { getClient, PoolClient } from "../../../config/database";
+import { FlightInfo } from "../../../types/flightInfo.types";
+import { parseSabreDateTime } from "../../../connectors/helpers/parseSabreDateTime";
+import { HotelData, HotelSegment } from "../../../types/hotelDetails.types";
 import {
-  PnrExtractionResult,
-} from "../connectors/helpers/otherHelpers";
-import { FlightInfo } from "../types/flightInfo.types";
+  CarRentalData,
+  CarRentalSegment,
+} from "../../../types/carDetails.types";
 
 class PnrService {
   /**

@@ -72,54 +72,50 @@ const asArray = <T>(value?: T | T[]): T[] =>
  * Generic & pure QueueCount parser
  */
 export function parseQueueCountResponse<
-  R extends Record<string, unknown>,
   Q extends SoapNode<QueueIdentifierAttrs>,
   T extends SoapNode<QueueTotalAttrs>,
 >(
-  response: R,
+  response: { QueueCountRS?: QueueCountRS<Q, T> },
   queueNumber: string | number | null = null,
-  options?: {
-    envelopeKey?: string;
-    bodyKey?: string;
-    responseKey?: string;
-  },
 ): ParsedQueueCountResult {
-  const {
-    envelopeKey = "soap-env:Envelope",
-    bodyKey = "soap-env:Body",
-    responseKey = "QueueCountRS",
-  } = options ?? {};
-
-  const envelope = (response as any)[envelopeKey] ?? (response as any).Envelope;
-
-  if (!envelope) {
-    throw new Error("Invalid response: Missing SOAP envelope");
-  }
-
-  const body = envelope[bodyKey] ?? envelope.Body;
-
-  if (!body) {
-    throw new Error("Invalid response: Missing SOAP body");
-  }
-
-  const queueCountRS = body[responseKey] ?? body.queueCountRS;
+  const queueCountRS = response?.QueueCountRS;
 
   if (!queueCountRS) {
     throw new Error("Invalid response: Missing QueueCountRS");
   }
 
+  // ---- Validate application status ----
+  const appResults =
+    (queueCountRS as any)["stl:ApplicationResults"] ||
+    (queueCountRS as any).ApplicationResults;
+
+  const status = appResults?.$?.status;
+
+  if (status && status !== "Complete") {
+    throw new Error(`QueueCountRS returned status: ${status}`);
+  }
+
+  // ---- Extract timestamp ----
+  const timestampStr =
+    appResults?.["stl:Success"]?.$?.timeStamp ||
+    appResults?.Success?.$?.timeStamp;
+
+  const timestamp = timestampStr ? new Date(timestampStr) : new Date();
+
+  // ---- Parse queues ----
   const queues: ParsedQueue[] = asArray<Q>(
-    queueCountRS?.QueueInfo?.QueueIdentifier,
+    queueCountRS.QueueInfo?.QueueIdentifier,
   ).map((q) => ({
     queueNumber: q.$.Number,
     count: Number.parseInt(q.$.Count, 10) || 0,
   }));
 
+  // ---- Parse totals ----
   const totalsMap: Record<string, number> = {};
 
-  asArray<T>(queueCountRS.Totals).forEach((total) => {
-    const type = total.$.Type.toLowerCase();
-    totalsMap[type] = Number.parseInt(total.$.Count, 10) || 0;
+  asArray<T>(queueCountRS.Totals).forEach((t) => {
+    const type = t.$.Type.toLowerCase();
+    totalsMap[type] = Number.parseInt(t.$.Count, 10) || 0;
   });
 
   return {
@@ -129,6 +125,7 @@ export function parseQueueCountResponse<
     totalMessages: totalsMap.messages ?? 0,
     totalSpecials: totalsMap.specials ?? 0,
     totalPNRs: totalsMap.pnrs ?? 0,
-    timestamp: new Date(),
+    timestamp,
   };
 }
+

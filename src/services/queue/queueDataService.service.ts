@@ -1,19 +1,19 @@
-import { getClient, PoolClient, transaction } from "../config/database";
-import { extractFlightData } from "../connectors/helpers/extractFlightData";
-import { extractTravelerData } from "../connectors/helpers/extractTravelerData";
+import { getClient, PoolClient, transaction } from "../../config/database";
+import { extractFlightData } from "../../connectors/helpers/extractFlightData";
+import { extractTravelerData } from "../../connectors/helpers/extractTravelerData";
 import {
   extractPnrDetails,
   getDefaultOrganizationId,
-} from "../connectors/helpers/otherHelpers";
+} from "../../connectors/helpers/otherHelpers";
 import {
   QueueData,
   QueueLogData,
   StoreQueueDataResult,
-} from "../types/queueData.types";
-import { SabreConfig } from "../types/sabre.types";
-import logger from "../utils/logger";
-import PnrService from "./pnrService.service";
+} from "../../types/queueData.types";
+import { SabreConfig } from "../../types/sabre.types";
+import logger from "../../utils/logger";
 import { v4 as uuidv4 } from "uuid";
+import PnrService from "./pnr/pnrService.service";
 
 const pnrService = new PnrService();
 

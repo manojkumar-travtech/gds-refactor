@@ -36,7 +36,6 @@ export class SabreQueueService extends ProfilesBaseService {
 
   async getQueueCount(queueNumber: string | number | null = null) {
     const sessionToken = await this.sessionService.getAccessToken();
-
     const body = buildQueueCountRequest({
       queueNumber: queueNumber ? String(queueNumber) : null,
       pcc: String(this.sabreConfig.pcc),

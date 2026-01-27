@@ -1,25 +1,13 @@
-import {
-  buildNavigationRequest,
-  buildQueueAccessRequest,
-} from "../../connectors/Envelopes/otherEnvelopes";
+import { buildNavigationRequest } from "../../connectors/Envelopes/otherEnvelopes";
 import logger from "../../utils/logger";
 import { ProfilesBaseService } from "../profile/profilesBase.service";
+import { sabreSessionPool } from "../sabreSessionPool";
+import { SabreSessionService } from "../sabreSessionService.service";
 
-export interface QueuePlaceResponse {
-  QueuePlaceRS?: {
-    $?: {
-      status?: string;
-    };
-    Text?: string | string[];
-  };
-}
-
-export interface QueueAccessResponse {
-  QueueAccessRS?: {
-    $?: {
-      status?: string;
-    };
-  };
+export interface BatchQueueResult {
+  recordLocator: string;
+  success: boolean;
+  error?: string;
 }
 
 export class PlaceQueueService extends ProfilesBaseService {
@@ -32,107 +20,82 @@ export class PlaceQueueService extends ProfilesBaseService {
     super();
   }
 
-  /**
-   * Places a PNR into the target queue and optionally removes it from the source queue
-   * @param recordLocator - The PNR record locator
-   * @param prefatoryInstructionCode - Queue instruction code (default: "11")
-   */
-  public async placeToQueue(
+  // ==========================================================
+  // MAIN ENTRY — PLACE + REMOVE
+  // ==========================================================
+  public async moveQueueItem(
     recordLocator: string,
     prefatoryInstructionCode: string = "11",
   ): Promise<void> {
-    const { sourceQueue, targetQueue, removeFromSource } = this.queueConfig;
+    let sessionToken: string | null = null;
+    let pooledSessionService: SabreSessionService | null = null;
 
     try {
-      // Step 1: Place PNR in target queue
-      logger.info(
-        `[placeToQueue][${recordLocator}] Placing in queue ${targetQueue}...`,
-      );
+      const session = await sabreSessionPool.acquireSession();
+      sessionToken = session.token;
+      pooledSessionService = session.service;
 
-      const response = await this.sendQueuePlaceRequest(
+      const { sourceQueue, targetQueue, removeFromSource } = this.queueConfig;
+
+      logger.info(`[QUEUE MOVE] ${recordLocator} → ${targetQueue}`);
+
+      // STEP 1 — Place on target queue
+      await this.placeOnQueueViaAPI(
         recordLocator,
+        targetQueue,
         prefatoryInstructionCode,
+        pooledSessionService,
       );
 
-      logger.info(
-        `[placeToQueue][${recordLocator}] Successfully placed in queue ${targetQueue}`,
-        { response: JSON.stringify(response) },
-      );
-
-      // Step 2: Remove from source queue if needed
-      if (removeFromSource && sourceQueue) {
-        logger.info(
-          `[placeToQueue][${recordLocator}] Removing from source queue ${sourceQueue}...`,
-        );
-
-        try {
-          await this.removeFromQueue(sourceQueue, recordLocator);
-          logger.info(
-            `[placeToQueue][${recordLocator}] Successfully removed from source queue ${sourceQueue}`,
-          );
-        } catch (removeError) {
-          const errorMessage =
-            removeError instanceof Error
-              ? removeError.message
-              : "Unknown error";
-          logger.error(
-            `[placeToQueue][${recordLocator}] Failed to remove from source queue ${sourceQueue}:`,
-            removeError,
-          );
-          throw new Error(
-            `Queue placement succeeded but removal from source queue failed: ${errorMessage}`,
-          );
-        }
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      logger.error(
-        `[placeToQueue][${recordLocator}] Error in queue placement workflow:`,
-        {
-          error: errorMessage,
-          stack: error instanceof Error ? error.stack : undefined,
+      // STEP 2 — Remove from source queue
+      if (sourceQueue && removeFromSource) {
+        await this.removeFromQueue(
           sourceQueue,
-          targetQueue,
-        },
+          recordLocator,
+          pooledSessionService,
+        );
+      }
+
+      logger.info(`[QUEUE MOVE] ✅ ${recordLocator} successfully moved`);
+    } catch (error: any) {
+      logger.error(
+        `[QUEUE MOVE] ❌ Failed to move ${recordLocator}: ${error.message}`,
       );
-      throw error instanceof Error ? error : new Error(String(error));
+      throw error;
+    } finally {
+      if (sessionToken) {
+        sabreSessionPool.releaseSession(sessionToken);
+      }
     }
   }
 
-  /**
-   * Sends a queue placement request to Sabre
-   * @param recordLocator - The PNR record locator
-   * @param prefatoryInstructionCode - Queue instruction code
-   * @returns Queue placement response
-   */
-  private async sendQueuePlaceRequest(
+  // ==========================================================
+  // PLACE ON QUEUE — STATELESS API
+  // ==========================================================
+  private async placeOnQueueViaAPI(
     recordLocator: string,
+    queueNumber: string,
     prefatoryInstructionCode: string,
-  ): Promise<QueuePlaceResponse> {
-    const timestamp = new Date().toISOString();
-    const sessionToken = await this.sessionService.getAccessToken();
+    pooledSessionService?: SabreSessionService | null,
+  ): Promise<void> {
+    const sessionToken = pooledSessionService
+      ? await pooledSessionService.getAccessToken()
+      : await this.sessionService.getAccessToken();
+
     const requestBody = `
-        <QueuePlaceRQ 
-          xmlns="http://webservices.sabre.com/sabreXML/2011/10" 
-          NumResponses="5" 
-          ReturnHostCommand="false" 
-          TimeStamp="${timestamp}" 
-          Version="2.0.4">
-          <QueueInfo>
-            <QueueIdentifier 
-              Number="${this.queueConfig.targetQueue}" 
-              PrefatoryInstructionCode="${prefatoryInstructionCode}" 
-              PseudoCityCode="${this.sabreConfig.pcc}"/>
-            <UniqueID ID="${recordLocator}"/>
-          </QueueInfo>
-        </QueuePlaceRQ>`;
+      <QueuePlaceRQ 
+        xmlns="http://webservices.sabre.com/sabreXML/2011/10"
+        Version="2.0.4">
+        <QueueInfo>
+          <QueueIdentifier 
+            Number="${queueNumber}" 
+            PrefatoryInstructionCode="${prefatoryInstructionCode}" 
+            PseudoCityCode="${this.sabreConfig.pcc}"/>
+          <UniqueID ID="${recordLocator}"/>
+        </QueueInfo>
+      </QueuePlaceRQ>`;
 
-    logger.info(
-      `[sendQueuePlaceRequest][${recordLocator}] Sending queue placement request to Sabre...`,
-    );
-
-    const response = (await this.soapExecutor.execute<QueuePlaceResponse>(
+    const response: any = await this.soapExecutor.execute(
       {
         service: this.QUEUE_PLACE_SERVICE,
         action: this.QUEUE_PLACE_ACTION,
@@ -140,140 +103,194 @@ export class PlaceQueueService extends ProfilesBaseService {
         sessionToken,
       },
       "QueuePlaceRS",
-    )) as any;
+    );
 
-    // Validate response
-    if (response?.QueuePlaceRS?.$?.status !== "Success") {
-      const errorText = Array.isArray(response?.QueuePlaceRS?.Text)
-        ? response.QueuePlaceRS.Text.join(", ")
-        : response?.QueuePlaceRS?.Text;
-      throw new Error(
-        `Queue placement failed: ${errorText || "Unknown error"}`,
-      );
+    const status = response?.["stl:ApplicationResults"]?.$?.status;
+
+    if (status !== "Complete") {
+      const errorText =
+        response?.["stl:ApplicationResults"]?.Error?.SystemSpecificResults
+          ?.Message?.[0]?._ || "Queue placement failed";
+      throw new Error(errorText);
     }
-
-    return response;
   }
 
-  /**
-   * Removes a PNR from the specified queue
-   * @param queueNumber - The queue number to remove from
-   * @param recordLocator - The PNR record locator
-   */
+  // ==========================================================
+  // QUEUE REMOVE — FULLY SAFE HOST TRANSACTION HANDLING
+  // ==========================================================
   public async removeFromQueue(
-    queueNumber: string | null | undefined,
+    queueNumber: string,
     recordLocator: string,
+    pooledSessionService?: SabreSessionService | null,
   ): Promise<void> {
-    if (!queueNumber) {
-      throw new Error("Queue Number is Required");
-    }
+    const sessionToken = pooledSessionService
+      ? await pooledSessionService.getAccessToken()
+      : await this.sessionService.getAccessToken();
+
+    logger.info(
+      `[QUEUE REMOVE] Searching ${recordLocator} in queue ${queueNumber}`,
+    );
+
+    const MAX_ITERATIONS = 300;
+    let iteration = 0;
+
     try {
-      const sessionToken = await this.sessionService.getAccessToken();
+      // START QUEUE SESSION
+      const startQueueRequest = `
+        <QueueAccessRQ 
+          xmlns="http://webservices.sabre.com/sabreXML/2011/10"
+          Version="2.0.3">
+          <QueueIdentifier 
+            Number="${queueNumber}" 
+            PseudoCityCode="${this.sabreConfig.pcc}"/>
+        </QueueAccessRQ>`;
 
-      // Access the queue
-      const accessRequest = buildQueueAccessRequest(
-        this.sabreConfig.pcc,
-        queueNumber,
-      );
-
-      const accessResponse = await this.soapExecutor.execute({
+      let response: any = await this.soapExecutor.execute({
         service: this.QUEUE_ACCESS_SERVICE,
         action: this.QUEUE_ACCESS_ACTION,
-        body: accessRequest,
+        body: startQueueRequest,
         sessionToken,
       });
 
-      if (accessResponse) {
-        logger.info(
-          `[removeFromQueue][${recordLocator}] Successfully accessed queue ${queueNumber}`,
-        );
-      }
+      while (iteration++ < MAX_ITERATIONS) {
+        const line = response?.QueueAccessRS?.Line;
+        const currentPNR =
+          line?.UniqueID?.$?.ID || line?.UniqueID?.ID || line?.$?.RecordLocator;
 
-      const navRequest = buildNavigationRequest("QR");
-      await this.soapExecutor.execute({
-        service: this.QUEUE_ACCESS_SERVICE,
-        action: this.QUEUE_ACCESS_ACTION,
-        body: navRequest,
-        sessionToken,
-      });
+        if (!line || !currentPNR) {
+          logger.info(
+            `[QUEUE REMOVE] Queue exhausted — ${recordLocator} not found`,
+          );
+          return;
+        }
 
-      logger.info(
-        `[removeFromQueue][${recordLocator}] Successfully removed from queue ${queueNumber}`,
-      );
+        logger.debug(`[QUEUE REMOVE] Iteration ${iteration}: ${currentPNR}`);
 
-      try {
-        const endRequest = buildNavigationRequest("QXI");
-        await this.soapExecutor.execute({
+        if (currentPNR.toUpperCase() === recordLocator.toUpperCase()) {
+          logger.info(`[QUEUE REMOVE] Match found → Removing ${recordLocator}`);
+
+          const removeRequest = buildNavigationRequest("QR");
+
+          const removeResponse: any = await this.soapExecutor.execute({
+            service: this.QUEUE_ACCESS_SERVICE,
+            action: this.QUEUE_ACCESS_ACTION,
+            body: removeRequest,
+            sessionToken,
+          });
+
+          const status =
+            removeResponse?.QueueAccessRS?.["stl:ApplicationResults"]?.$
+              ?.status;
+
+          if (status !== "Complete") {
+            const errorText =
+              removeResponse?.QueueAccessRS?.["stl:ApplicationResults"]?.Error
+                ?.SystemSpecificResults?.Message?.[0]?._ ||
+              "Sabre rejected QR remove command";
+            throw new Error(errorText);
+          }
+
+          logger.info(
+            `[QUEUE REMOVE] ✅ ${recordLocator} removed successfully`,
+          );
+          return;
+        }
+
+        // MOVE NEXT
+        const nextRequest = buildNavigationRequest("I");
+
+        response = await this.soapExecutor.execute({
           service: this.QUEUE_ACCESS_SERVICE,
           action: this.QUEUE_ACCESS_ACTION,
-          body: endRequest,
+          body: nextRequest,
           sessionToken,
         });
-      } catch (endError) {
-        const errorMessage =
-          endError instanceof Error ? endError.message : "Unknown error";
-        logger.warn(
-          `[removeFromQueue][${recordLocator}] Warning: Could not end queue access:`,
-          errorMessage,
-        );
       }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      logger.error(
-        `[removeFromQueue][${recordLocator}] ${errorMessage} ${queueNumber}:`,
-        error,
+
+      logger.warn(
+        `[QUEUE REMOVE] Safety stop — ${recordLocator} not found after ${MAX_ITERATIONS} scans`,
       );
-      throw error instanceof Error ? error : new Error(String(error));
+    } catch (error: any) {
+      logger.error(`[QUEUE REMOVE] Error: ${error.message}`);
+      throw error;
+    } finally {
+      // ALWAYS EXIT QUEUE SESSION — CRITICAL
+      await this.exitQueue(sessionToken);
     }
   }
 
-  /**
-   * Moves a PNR to the error queue
-   * @param recordLocator - The PNR record locator
-   * @param errorMessage - Description of the error
-   */
-  public async moveToErrorQueue(
-    recordLocator: string,
-    errorMessage: string,
-  ): Promise<void> {
-    const queueNumber = this.queueConfig.errorQueue;
-
-    if (!queueNumber) {
-      throw new Error("Error queue not configured");
-    }
-
+  // ==========================================================
+  // EXIT QUEUE — PREVENTS FIN OR IG
+  // ==========================================================
+  private async exitQueue(sessionToken: string): Promise<void> {
     try {
-      logger.info(
-        `[moveToErrorQueue][${recordLocator}] Moving PNR to error queue ${queueNumber}: ${errorMessage}`,
-      );
-
-      const requestObj = this.queueBuilder.buildQueuePlaceRequest(
-        recordLocator,
-        queueNumber,
-        this.sabreConfig.pcc,
-      );
-
-      const xml = this.xmlBuilder.buildObject(requestObj);
+      const exitRequest = buildNavigationRequest("QXI");
 
       await this.soapExecutor.execute({
-        service: "QueuePlaceRQ",
-        action: "OTA_QueuePlaceLLSRQ",
-        sessionToken: await this.sessionService.getAccessToken(),
-        body: xml,
+        service: "SabreCommandLLSRQ",
+        action: "SabreCommandLLSRQ",
+        body: exitRequest,
+        sessionToken,
       });
 
-      logger.info(
-        `[moveToErrorQueue][${recordLocator}] Successfully moved to error queue ${queueNumber}`,
-      );
+      logger.debug("[QUEUE EXIT] QXI sent successfully");
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      logger.error(
-        `[moveToErrorQueue][${recordLocator}] Failed to move to error queue:`,
-        error,
-      );
-      throw new Error(`Failed to move to error queue: ${errorMessage}`);
+      logger.warn("[QUEUE EXIT] QXI failed, sending IG");
+
+      try {
+        const igRequest = buildNavigationRequest("IG");
+
+        await this.soapExecutor.execute({
+          service: "SabreCommandLLSRQ",
+          action: "SabreCommandLLSRQ",
+          body: igRequest,
+          sessionToken,
+        });
+      } catch {
+        logger.error("[QUEUE EXIT] IG also failed — session may reset");
+      }
     }
+  }
+
+  // ==========================================================
+  // BATCH MOVE
+  // ==========================================================
+  public async batchMoveToQueue(
+    recordLocators: string[],
+    concurrency: number = 1,
+  ): Promise<BatchQueueResult[]> {
+    const results: BatchQueueResult[] = [];
+    const chunks = this.chunkArray(recordLocators, concurrency);
+
+    for (const chunk of chunks) {
+      const chunkResults = await Promise.allSettled(
+        chunk.map((pnr) => this.moveQueueItem(pnr)),
+      );
+
+      for (let i = 0; i < chunkResults.length; i++) {
+        const recordLocator = chunk[i];
+        const result = chunkResults[i];
+
+        if (result.status === "fulfilled") {
+          results.push({ recordLocator, success: true });
+        } else {
+          results.push({
+            recordLocator,
+            success: false,
+            error: result.reason?.message || "Unknown error",
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
   }
 }

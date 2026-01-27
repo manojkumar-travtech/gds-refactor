@@ -1,15 +1,13 @@
-import { buildGetReservationRequest } from "../connectors/Envelopes/otherEnvelopes";
+import { buildGetReservationRequest } from "../../../connectors/Envelopes/otherEnvelopes";
 import {
-  sendQueueRequest,
-  SendQueueRequestOptions,
-} from "../connectors/Envelopes/buildSoapEnvelope";
-import {
-  parsePNRDetails,
   PNRDataFromParser,
   ReservationFromParser,
-} from "../parsers/parsePNRDetails";
-import logger from "../utils/logger";
-import { BaseSabreService } from "./base-sabre.service";
+} from "../../../parsers/parsePNRDetails";
+import logger from "../../../utils/logger";
+import { ProfilesBaseService } from "../../profile/profilesBase.service";
+import { ComprehensivePNRParser } from "./comprehensive-pnr-parser";
+import { sabreSessionPool } from "../../sabreSessionPool";
+import { SabreSessionService } from "../../sabreSessionService.service";
 
 interface ParsedPNRResult {
   pnrNumber?: string;
@@ -24,7 +22,7 @@ interface ParsedPNRResult {
   trips?: any;
 }
 
-export class PnrDetailsService extends BaseSabreService {
+export class PnrDetailsService extends ProfilesBaseService {
   private static instance: PnrDetailsService;
   private readonly MAX_RETRIES = 2;
   private readonly RETRY_DELAY = 1000; // milliseconds
@@ -65,102 +63,126 @@ export class PnrDetailsService extends BaseSabreService {
 
     logger.info("Fetching PNR details", { pnr: cleanPnr });
 
-    let lastError: Error | null = null;
+    let sessionToken: string | null = null;
+    let sessionService: SabreSessionService | null = null;
 
-    // Retry loop
-    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
-      try {
-        logger.debug("Attempting to fetch PNR details", {
-          pnr: cleanPnr,
-          attempt,
-          maxRetries: this.MAX_RETRIES,
-        });
+    try {
+      // 👇 Acquire session from pool
+      const session = await sabreSessionPool.acquireSession();
+      sessionToken = session.token;
+      sessionService = session.service;
 
-        const sessionToken: string = await this.sessionService.getAccessToken();
+      logger.debug("Session acquired from pool", {
+        pnr: cleanPnr,
+        sessionToken: sessionToken.substring(0, 20) + "...",
+      });
 
-        const request: string = buildGetReservationRequest(cleanPnr);
+      let lastError: Error | null = null;
 
-        const { endpoint, organization } = this.sabreConfig;
-
-        const req: SendQueueRequestOptions = {
-          service: "OTA_GetReservationRQ",
-          action: "GetReservationRQ",
-          body: request,
-          endpoint,
-          organization,
-          sessionToken,
-        };
-
-        logger.debug("Sending request to Sabre", {
-          pnr: cleanPnr,
-          attempt,
-          service: req.service,
-          action: req.action,
-        });
-
-        const response = await sendQueueRequest(req);
-
-        logger.debug("Received response from Sabre", {
-          pnr: cleanPnr,
-          attempt,
-          hasResponse: !!response,
-        });
-
-        // Check if response is valid
-        if (!response) {
-          throw new Error("Empty response received from Sabre");
-        }
-
-        // Parse and return response
-        return await this.parsePnrDetailsResponse(response, cleanPnr);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        logger.warn("PNR fetch attempt failed", {
-          pnr: cleanPnr,
-          attempt,
-          maxRetries: this.MAX_RETRIES,
-          error: lastError.message,
-        });
-
-        // Don't retry on validation or configuration errors
-        if (
-          lastError.message.includes("Invalid PNR number") ||
-          lastError.message.includes("Sabre configuration is incomplete") ||
-          lastError.message.includes("Failed to build request") ||
-          lastError.message.includes("Failed to parse PNR details")
-        ) {
-          logger.error("Non-retryable error encountered", {
+      // Retry loop
+      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+        try {
+          logger.debug("Attempting to fetch PNR details", {
             pnr: cleanPnr,
             attempt,
+            maxRetries: this.MAX_RETRIES,
+          });
+
+          // 👇 Use the token from the acquired session
+          const token = await sessionService.getAccessToken();
+
+          const request: string = buildGetReservationRequest(cleanPnr);
+
+          const req = {
+            service: "OTA_GetReservationRQ",
+            action: "GetReservationRQ",
+            body: request,
+            sessionToken: token, // 👈 Use the pooled session token
+          };
+
+          logger.debug("Sending request to Sabre", {
+            pnr: cleanPnr,
+            attempt,
+            service: req.service,
+            action: req.action,
+          });
+
+          const response = await this.soapExecutor.execute(req);
+
+          logger.debug("Received response from Sabre", {
+            pnr: cleanPnr,
+            attempt,
+            hasResponse: !!response,
+          });
+
+          // Check if response is valid
+          if (!response) {
+            throw new Error("Empty response received from Sabre");
+          }
+
+          // Parse and return response
+          const result = await this.parsePnrDetailsResponse(response, cleanPnr);
+
+          logger.info("PNR details retrieved successfully", { pnr: cleanPnr });
+          return result;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+
+          logger.warn("PNR fetch attempt failed", {
+            pnr: cleanPnr,
+            attempt,
+            maxRetries: this.MAX_RETRIES,
             error: lastError.message,
           });
-          throw lastError;
-        }
 
-        // Wait before retrying (except on last attempt)
-        if (attempt < this.MAX_RETRIES) {
-          const delay = this.RETRY_DELAY * attempt; // Exponential backoff
-          logger.debug("Waiting before retry", {
-            pnr: cleanPnr,
-            attempt,
-            delay,
-          });
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          // Don't retry on validation or configuration errors
+          if (
+            lastError.message.includes("Invalid PNR number") ||
+            lastError.message.includes("Sabre configuration is incomplete") ||
+            lastError.message.includes("Failed to build request") ||
+            lastError.message.includes("Failed to parse PNR details")
+          ) {
+            logger.error("Non-retryable error encountered", {
+              pnr: cleanPnr,
+              attempt,
+              error: lastError.message,
+            });
+            throw lastError;
+          }
+
+          // Wait before retrying (except on last attempt)
+          if (attempt < this.MAX_RETRIES) {
+            const delay = this.RETRY_DELAY * attempt; // Exponential backoff
+            logger.debug("Waiting before retry", {
+              pnr: cleanPnr,
+              attempt,
+              delay,
+            });
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
         }
       }
+
+      // All retries exhausted
+      logger.error("All retry attempts exhausted for PNR fetch", {
+        pnr: cleanPnr,
+        maxRetries: this.MAX_RETRIES,
+        lastError: lastError?.message,
+      });
+
+      throw new Error(
+        `Failed to retrieve PNR ${cleanPnr} after ${this.MAX_RETRIES} attempts: ${lastError?.message || "Unknown error"}`,
+      );
+    } finally {
+      // 👇 CRITICAL: Always release session back to pool
+      if (sessionToken) {
+        sabreSessionPool.releaseSession(sessionToken);
+        logger.debug("Session released back to pool", {
+          pnr: cleanPnr,
+          sessionToken: sessionToken.substring(0, 20) + "...",
+        });
+      }
     }
-
-    // All retries exhausted
-    logger.error("All retry attempts exhausted for PNR fetch", {
-      pnr: cleanPnr,
-      maxRetries: this.MAX_RETRIES,
-      lastError: lastError?.message,
-    });
-
-    throw new Error(
-      `Failed to retrieve PNR ${cleanPnr} after ${this.MAX_RETRIES} attempts: ${lastError?.message || "Unknown error"}`,
-    );
   }
 
   /**
@@ -178,7 +200,7 @@ export class PnrDetailsService extends BaseSabreService {
 
     let parsedData: any;
     try {
-      parsedData = await parsePNRDetails(response);
+      parsedData = await ComprehensivePNRParser.parse(response);
     } catch (error) {
       logger.error("Exception thrown during PNR parsing", {
         pnr: pnrNumber,
@@ -212,13 +234,13 @@ export class PnrDetailsService extends BaseSabreService {
     // Extract passenger name from travelers array
     let passengerName: string | undefined;
     if (
-      parsedData.travelers &&
-      Array.isArray(parsedData.travelers) &&
-      parsedData.travelers.length > 0
+      parsedData.passengers &&
+      Array.isArray(parsedData.passengers) &&
+      parsedData.passengers.length > 0
     ) {
       const primaryTraveler =
-        parsedData.travelers.find((t: any) => t.isPrimary) ||
-        parsedData.travelers[0];
+        parsedData.passengers.find((t: any) => t.isPrimary) ||
+        parsedData.passengers[0];
       if (
         primaryTraveler &&
         primaryTraveler.firstName &&
@@ -246,13 +268,13 @@ export class PnrDetailsService extends BaseSabreService {
       pnrNumber: parsedData.pnr || pnrNumber,
       passengerName,
       profileId,
-      flightInfo: parsedData.flightInfo || [],
-      carRentalInfo: parsedData.carRentalInfo || [],
-      hotelInfo: parsedData.hotelInfo || [],
+      flightInfo: parsedData.flights  || [],
+      carRentalInfo: parsedData.cars || [],
+      hotelInfo: parsedData.hotels  || [],
       rawData: response,
       timestamp: new Date().toISOString(),
-      travelers: parsedData.travelers || [],
-      trips: parsedData.trips || null,
+      travelers: parsedData.passengers  || [],
+      trips: parsedData.trip || null,
     };
 
     logger.info("PNR details parsed successfully", {

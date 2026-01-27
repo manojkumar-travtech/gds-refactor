@@ -8,6 +8,13 @@ import {
   BuildSoapEnvelopeInterface,
 } from "../connectors/Envelopes/buildSoapEnvelope";
 import logger from "../utils/logger";
+interface SabreSessionToken {
+  _: string;
+  $?: {
+    valueType?: string;
+    EncodingType?: string;
+  };
+}
 
 export class SabreSessionService {
   private static instance: SabreSessionService;
@@ -16,7 +23,7 @@ export class SabreSessionService {
   private parser: Parser;
   private config = ConfigManager.getInstance();
 
-  private sessionToken?: string;
+  private sessionToken?: SabreSessionToken;
   private tokenExpiry?: Date;
   private isAuthenticated = false;
   private conversationId?: string;
@@ -139,12 +146,13 @@ export class SabreSessionService {
   async getAccessToken(): Promise<string> {
     await this.ensureSession();
 
-    if (!this.sessionToken) {
+    if (!this.sessionToken?._) {
       throw new Error("Sabre session token unavailable");
     }
 
-    return this.sessionToken;
+    return this.sessionToken._;
   }
+
   async getConversationId() {
     return this.conversationId;
   }
@@ -161,7 +169,7 @@ export class SabreSessionService {
       service: "SessionCloseRQ",
       body: body,
       organization: sabre.organization,
-      sessionToken: this.sessionToken,
+      sessionToken: this.sessionToken._ ? this.sessionToken._ : "",
     };
     const soapEnvelope = buildSoapEnvelope(soapEnvelopeRequest);
 
