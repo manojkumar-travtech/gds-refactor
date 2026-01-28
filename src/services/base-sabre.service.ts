@@ -1,5 +1,5 @@
 import { ConfigManager } from "../config/config.manager";
-import { SabreSessionService } from "./sabreSessionService.service";
+import { SabreSessionService } from "../sessionManagement/sabreSessionService.service";
 
 export abstract class BaseSabreService {
   protected readonly sabreConfig = ConfigManager.getInstance().sabre;

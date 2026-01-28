@@ -539,6 +539,7 @@ interface BookingInfo {
   tripName?: string;
   tripNumber?: string;
   tripPurpose?: string;
+  recordLocator?: string;
 }
 
 interface QueueInfo {
@@ -559,7 +560,7 @@ interface RemarkInfo {
   segmentAssociation?: string;
 }
 
-interface CompletePNRData {
+export interface CompletePNRData {
   // Basic Info
   booking: BookingInfo;
   

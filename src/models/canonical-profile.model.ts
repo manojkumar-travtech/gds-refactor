@@ -1,191 +1,176 @@
 /**
- * Canonical Profile Data Model
- * This model represents a unified structure for profile data across all GDS systems
- * Aligned with the 'dimensions' schema and 'provenance' tracking.
+ * Canonical Profile Model
+ *
+ * This module defines the standardized profile structure that all GDS-specific
+ * profiles are parsed into. This allows for consistent handling of traveler
+ * data regardless of the source system.
+ *
+ * @module models/canonical-profile
  */
 
-// ============================================================================
-// PROVENANCE & METADATA
-// ============================================================================
-
-export interface ProvenanceRecord {
-  source: GDSSource | 'USER' | 'ADMIN' | 'API' | 'SYSTEM';
-  sourceId?: string;
-  timestamp: Date;
-  confidence?: number; // 0.0 to 1.0
-  modifiedBy?: string; // User ID or System Process
-}
-
-export interface Provenance {
-  [field: string]: ProvenanceRecord;
-}
-
-export interface WithProvenance {
-  provenance?: Provenance;
-}
-
-// ============================================================================
-// CORE PROFILE
-// ============================================================================
-
-export interface CanonicalProfile extends WithProvenance {
-  // Core Identity
-  id: string;
-  profileName?: string;
-  type: ProfileType;
-  domain?: string;
-  status: ProfileStatus; // Mapped to is_active in DB
-  
-  // Timestamps
-  created?: Date;
-  updated?: Date;
-  deleted?: Date;
-
-  // Personal Information
-  personal: PersonalInfo;
-
-  // Contact Information
-  contact: ContactInfo;
-
-  // Employment Information
-  employment?: EmploymentInfo;
-
-  // Emergency Contacts
-  emergencyContacts?: EmergencyContact[];
-
-  // Related Travelers
-  relatedTravelers?: RelatedTraveler[];
-
-  // Travel Policy
-  travelPolicy?: TravelPolicy;
-
-  // Tax Information
-  taxInfo?: TaxInfo[];
-
-  // Travel Documents
-  documents: TravelDocument[];
-
-  // Loyalty Programs
-  loyalty: LoyaltyProgram[];
-
-  // Payment Methods
-  paymentMethods: PaymentMethod[];
-
-  // Travel Preferences
-  preferences: TravelPreferences;
-
-  // Remarks and Notes
-  remarks: Remark[];
-
-  // Metadata
-  metadata: ProfileMetadata;
-}
-
-// ============================================================================
-// ENUMS (Aligned with dimensions schema)
-// ============================================================================
-
+/**
+ * Profile type classification
+ */
 export enum ProfileType {
-  PERSONAL = 'personal',
-  BUSINESS = 'business'
+  PERSONAL = "PERSONAL",
+  BUSINESS = "BUSINESS",
+  GROUP = "GROUP",
+  AGENCY = "AGENCY",
 }
 
+/**
+ * Profile status
+ */
 export enum ProfileStatus {
-  ACTIVE = 'active',
-  INACTIVE = 'inactive',
-  DELETED = 'deleted',
-  SUSPENDED = 'suspended'
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+  SUSPENDED = "SUSPENDED",
+  DELETED = "DELETED",
+  PENDING = "PENDING",
 }
 
-export enum GDSSource {
-  SABRE = 'sabre',
-  AMADEUS = 'amadeus',
-  GALILEO = 'galileo',
-  WORLDSPAN = 'worldspan',
-  APOLLO = 'apollo',
-  OTHER = 'other'
+/**
+ * Gender specification
+ */
+export enum Gender {
+  MALE = "MALE",
+  FEMALE = "FEMALE",
+  UNSPECIFIED = "UNSPECIFIED",
+  OTHER = "OTHER",
 }
 
+/**
+ * Travel document types
+ */
 export enum DocumentType {
-  PASSPORT = 'passport',
-  DRIVERS_LICENSE = 'drivers_license',
-  NATIONAL_ID = 'national_id',
-  VISA = 'visa',
-  KNOWN_TRAVELER_NUMBER = 'known_traveler_number',
-  REDRESS_NUMBER = 'redress_number',
-  OTHER = 'other'
+  PASSPORT = "PASSPORT",
+  VISA = "VISA",
+  NATIONAL_ID = "NATIONAL_ID",
+  DRIVERS_LICENSE = "DRIVERS_LICENSE",
+  KNOWN_TRAVELER_NUMBER = "KNOWN_TRAVELER_NUMBER",
+  REDRESS_NUMBER = "REDRESS_NUMBER",
+  OTHER = "OTHER",
 }
 
-export enum BookingStatus {
-  DRAFT = 'draft',
-  PENDING_APPROVAL = 'pending_approval',
-  APPROVED = 'approved',
-  BOOKED = 'booked',
-  CANCELLED = 'cancelled',
-  COMPLETED = 'completed'
+/**
+ * Payment method types
+ */
+export enum PaymentType {
+  CREDIT_CARD = "CREDIT_CARD",
+  DEBIT_CARD = "DEBIT_CARD",
+  BANK_ACCOUNT = "BANK_ACCOUNT",
+  TRAVEL_ACCOUNT = "TRAVEL_ACCOUNT",
+  CORPORATE_CARD = "CORPORATE_CARD",
+  OTHER = "OTHER",
 }
 
-export enum SegmentType {
-  FLIGHT = 'flight',
-  HOTEL = 'hotel',
-  CAR_RENTAL = 'car_rental',
-  ACTIVITY = 'activity',
-  TRANSFER = 'transfer',
-  OTHER = 'other'
+/**
+ * Preference level for travel preferences
+ */
+export enum PreferenceLevel {
+  PREFERRED = "PREFERRED",
+  ACCEPTABLE = "ACCEPTABLE",
+  RESTRICTED = "RESTRICTED",
+  EXCLUDED = "EXCLUDED",
+  UNSPECIFIED = "UNSPECIFIED",
 }
 
-export enum UserRole {
-  SUPER_ADMIN = 'super_admin',
-  ORG_ADMIN = 'org_admin',
-  TRAVEL_MANAGER = 'travel_manager',
-  TRAVELER = 'traveler',
-  APPROVER = 'approver'
+/**
+ * Seat position preferences
+ */
+export enum SeatPosition {
+  WINDOW = "WINDOW",
+  AISLE = "AISLE",
+  MIDDLE = "MIDDLE",
+  ANY = "ANY",
 }
 
-// ============================================================================
-// SUB-INTERFACES
-// ============================================================================
+/**
+ * Smoking preferences
+ */
+export enum SmokingPreference {
+  SMOKING = "SMOKING",
+  NON_SMOKING = "NON_SMOKING",
+  NO_PREFERENCE = "NO_PREFERENCE",
+}
 
-export interface PersonalInfo extends WithProvenance {
-  firstName?: string;
-  lastName?: string;
-  middleName?: string;
+/**
+ * Vehicle transmission type
+ */
+export enum TransmissionType {
+  AUTOMATIC = "AUTOMATIC",
+  MANUAL = "MANUAL",
+  NO_PREFERENCE = "NO_PREFERENCE",
+}
+
+/**
+ * Remark/note types
+ */
+export enum RemarkType {
+  GENERAL = "GENERAL",
+  INVOICE = "INVOICE",
+  ITINERARY = "ITINERARY",
+  HISTORICAL = "HISTORICAL",
+  HIDDEN = "HIDDEN",
+  CORPORATE = "CORPORATE",
+  ACCOUNTING = "ACCOUNTING",
+  CUSTOM = "CUSTOM",
+}
+
+/**
+ * Source GDS system
+ */
+export enum GDSSource {
+  SABRE = "SABRE",
+  AMADEUS = "AMADEUS",
+  GALILEO = "GALILEO",
+  WORLDSPAN = "WORLDSPAN",
+  APOLLO = "APOLLO",
+  OTHER = "OTHER",
+}
+
+/**
+ * Personal information
+ */
+export interface PersonalInfo {
   title?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
   suffix?: string;
+  preferredName?: string;
   dob?: Date;
   gender?: Gender;
   nationality?: string;
 }
 
-export enum Gender {
-  MALE = 'M',
-  FEMALE = 'F',
-  OTHER = 'O',
-  UNSPECIFIED = 'U'
-}
-
-export interface ContactInfo extends WithProvenance {
-  emails: EmailAddress[];
-  phones: PhoneNumber[];
-  addresses: Address[];
-}
-
-export interface EmailAddress extends WithProvenance {
-  type: string; // WORK, PERSONAL
+/**
+ * Email address
+ */
+export interface EmailAddress {
+  type: string;
   address: string;
-  primary: boolean;
+  primary?: boolean;
+  verified?: boolean;
 }
 
-export interface PhoneNumber extends WithProvenance {
-  type: string; // MOBILE, HOME, WORK
+/**
+ * Phone number
+ */
+export interface PhoneNumber {
+  type: string;
   number: string;
   countryCode?: string;
   extension?: string;
   primary?: boolean;
+  verified?: boolean;
 }
 
-export interface Address extends WithProvenance {
-  type: string; // HOME, WORK
+/**
+ * Physical address
+ */
+export interface Address {
+  type: string;
   line1?: string;
   line2?: string;
   line3?: string;
@@ -194,9 +179,22 @@ export interface Address extends WithProvenance {
   zip?: string;
   country?: string;
   primary?: boolean;
+  validated?: boolean;
 }
 
-export interface EmploymentInfo extends WithProvenance {
+/**
+ * Contact information
+ */
+export interface ContactInfo {
+  emails: EmailAddress[];
+  phones: PhoneNumber[];
+  addresses: Address[];
+}
+
+/**
+ * Employment information
+ */
+export interface EmploymentInfo {
   company?: string;
   title?: string;
   department?: string;
@@ -208,23 +206,13 @@ export interface EmploymentInfo extends WithProvenance {
   hireDate?: Date;
   location?: string;
   region?: string;
-  isCurrent?: boolean;
+  manager?: string;
 }
 
-export interface TravelPolicy {
-  name: string;
-  policyId?: string;
-  allowance?: string;
-  restrictions?: string[];
-}
-
-export interface TaxInfo {
-  taxId: string;
-  type: string;
-  country?: string;
-}
-
-export interface EmergencyContact extends WithProvenance {
+/**
+ * Emergency contact
+ */
+export interface EmergencyContact {
   firstName?: string;
   lastName?: string;
   relationship?: string;
@@ -234,164 +222,225 @@ export interface EmergencyContact extends WithProvenance {
   primary?: boolean;
 }
 
+/**
+ * Related traveler
+ */
 export interface RelatedTraveler {
   firstName?: string;
   lastName?: string;
   relationType?: string;
   phone?: string;
   email?: string;
+  dateOfBirth?: Date;
+  profileId?: string;
 }
 
-export interface TravelDocument extends WithProvenance {
+/**
+ * Travel document
+ */
+export interface TravelDocument {
   type: DocumentType;
   number: string;
   issuingCountry?: string;
   citizenship?: string;
-  issueDate?: Date;
+  effectiveDate?: Date;
   expirationDate?: Date;
   holderName?: string;
-  isVerified?: boolean;
+  issueLocation?: string;
+  primary?: boolean;
+  issueDate?: Date;
 }
 
-export interface LoyaltyProgram extends WithProvenance {
+/**
+ * Loyalty program membership
+ */
+export interface LoyaltyProgram {
   programName: string;
-  providerType: string; // AIRLINE, HOTEL, CAR
+  providerType: string;
   providerName: string;
   number: string;
   tier?: string;
   expirationDate?: Date;
-  pointsBalance?: number;
+  primary?: boolean;
 }
 
-export interface PaymentMethod extends WithProvenance {
+/**
+ * Payment method
+ */
+export interface PaymentMethod {
   type: PaymentType;
   cardType?: string;
   maskedNumber?: string;
-  expirationMonth?: number;
-  expirationYear?: number;
+  expiration?: string;
   holderName?: string;
   billingAddress?: Address;
-  isCorporate?: boolean;
-  isDefault?: boolean;
+  primary?: boolean;
+  expirationMonth?: number;
+  expirationYear?: number;
 }
 
-export enum PaymentType {
-  CREDIT_CARD = 'CC',
-  DEBIT_CARD = 'DC',
-  INVOICE = 'INV',
-  OTHER = 'OTH'
+/**
+ * Seat preference details
+ */
+export interface SeatPreference {
+  position?: SeatPosition;
+  location?: string;
+  type?: string;
+  characteristics?: string[];
 }
 
-export interface TravelPreferences extends WithProvenance {
-  airlines: AirlinePreference[];
-  hotels: HotelPreference[];
-  cars: CarPreference[];
-  rail?: RailPreference[];
-  general?: GeneralPreference[];
-}
-
+/**
+ * Airline preference
+ */
 export interface AirlinePreference {
   airline?: string;
-  level: PreferenceLevel;
+  level?: PreferenceLevel;
   seat?: SeatPreference;
   meal?: string;
   specialService?: string[];
+  notes?: string;
 }
 
-export interface SeatPreference {
-  position?: SeatPosition;
-  location?: SeatLocation;
-  type?: string;
-}
-
-export enum SeatPosition {
-  WINDOW = 'Window',
-  AISLE = 'Aisle',
-  MIDDLE = 'Middle',
-  ANY = 'Any'
-}
-
-export enum SeatLocation {
-  FRONT = 'Front',
-  MIDDLE = 'Middle',
-  REAR = 'Rear',
-  EXIT_ROW = 'ExitRow',
-  BULKHEAD = 'Bulkhead',
-  ANY = 'Any'
-}
-
+/**
+ * Hotel preference
+ */
 export interface HotelPreference {
   chain?: string;
-  level: PreferenceLevel;
+  level?: PreferenceLevel;
   roomType?: string;
   smokingPreference?: SmokingPreference;
   bedType?: string;
+  floor?: string;
+  amenities?: string[];
+  notes?: string;
 }
 
-export enum SmokingPreference {
-  SMOKING = 'S',
-  NON_SMOKING = 'NS',
-  NO_PREFERENCE = 'N'
-}
-
+/**
+ * Car rental preference
+ */
 export interface CarPreference {
   vendor?: string;
-  level: PreferenceLevel;
+  level?: PreferenceLevel;
   vehicleType?: string;
   transmission?: TransmissionType;
+  airConditioning?: boolean;
+  notes?: string;
 }
 
-export enum TransmissionType {
-  AUTOMATIC = 'A',
-  MANUAL = 'M',
-  NO_PREFERENCE = 'N'
+/**
+ * Travel preferences
+ */
+export interface TravelPreferences {
+  airlines: AirlinePreference[];
+  hotels: HotelPreference[];
+  cars: CarPreference[];
 }
 
-export interface RailPreference {
-  vendor?: string;
-  level: PreferenceLevel;
-  seatType?: string;
-  class?: string;
+/**
+ * Travel policy information
+ */
+export interface TravelPolicy {
+  name: string;
+  policyId?: string;
+  allowance?: string;
+  restrictions?: string[];
+  approvalRequired?: boolean;
 }
 
-export interface GeneralPreference {
-  category: string;
-  type: string;
-  value: string;
+/**
+ * Tax information
+ */
+export interface TaxInfo {
+  taxId: string;
+  type?: string;
+  country?: string;
 }
 
-export enum PreferenceLevel {
-  PREFERRED = 'Preferred',
-  ACCEPTABLE = 'Acceptable',
-  RESTRICTED = 'Restricted',
-  EXCLUDED = 'Excluded'
-}
-
+/**
+ * Remark/note
+ */
 export interface Remark {
   type: RemarkType;
   category?: string;
   text: string;
   timestamp?: Date;
   userId?: string;
+  source?: string;
 }
 
-export enum RemarkType {
-  GENERAL = 'General',
-  INVOICE = 'Invoice',
-  ITINERARY = 'Itinerary',
-  HISTORICAL = 'Historical',
-  HIDDEN = 'Hidden',
-  CORPORATE = 'Corporate',
-  ACCOUNTING = 'Accounting'
-}
-
+/**
+ * Profile metadata
+ */
 export interface ProfileMetadata {
   sourceGDS: GDSSource;
   sourceId: string;
   sourcePCC: string;
-  lastSyncDate?: Date;
-  syncVersion?: string;
-  completenessScore?: number;
+  lastSyncDate: Date;
+  syncVersion: string;
   customFields?: Record<string, any>;
+  tags?: string[];
 }
 
+/**
+ * Main canonical profile structure
+ */
+export interface CanonicalProfile {
+  // Identity
+  id: string;
+  profileName?: string;
+  type: ProfileType;
+  domain?: string;
+  status: ProfileStatus;
+  created?: Date;
+  updated?: Date;
+
+  // Core Information
+  personal: PersonalInfo;
+  contact: ContactInfo;
+  employment?: EmploymentInfo;
+
+  // Relationships
+  emergencyContacts: EmergencyContact[];
+  relatedTravelers: RelatedTraveler[];
+
+  // Travel Information
+  documents: TravelDocument[];
+  loyalty: LoyaltyProgram[];
+  paymentMethods: PaymentMethod[];
+  preferences: TravelPreferences;
+
+  // Policy & Compliance
+  travelPolicy?: TravelPolicy;
+  taxInfo?: TaxInfo[];
+
+  // Additional Data
+  remarks: Remark[];
+  metadata: ProfileMetadata;
+}
+
+/**
+ * Validation result
+ */
+export interface ValidationResult {
+  valid: boolean;
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+}
+
+/**
+ * Validation error
+ */
+export interface ValidationError {
+  field: string;
+  message: string;
+  code: string;
+}
+
+/**
+ * Validation warning
+ */
+export interface ValidationWarning {
+  field: string;
+  message: string;
+  code: string;
+}

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import logger from "../utils/logger";
-import { SabreSessionService } from "../services/sabreSessionService.service";
+import { SabreSessionService } from "../sessionManagement/sabreSessionService.service";
 
 const router = Router();
 const sabreSession = SabreSessionService.getInstance();

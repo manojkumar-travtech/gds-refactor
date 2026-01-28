@@ -1,8 +1,8 @@
 import { buildNavigationRequest } from "../../connectors/Envelopes/otherEnvelopes";
 import logger from "../../utils/logger";
 import { ProfilesBaseService } from "../profile/profilesBase.service";
-import { sabreSessionPool } from "../sabreSessionPool";
-import { SabreSessionService } from "../sabreSessionService.service";
+import { sabreSessionPool } from "../../sessionManagement/sabreSessionPool";
+import { SabreSessionService } from "../../sessionManagement/sabreSessionService.service";
 
 export interface BatchQueueResult {
   recordLocator: string;
@@ -21,10 +21,12 @@ export class PlaceQueueService extends ProfilesBaseService {
   }
 
   // ==========================================================
-  // MAIN ENTRY — PLACE + REMOVE
+  // UNIFIED QUEUE MOVE — HANDLES BOTH TARGET AND ERROR QUEUES
   // ==========================================================
   public async moveQueueItem(
+    sourceQueue: string,
     recordLocator: string,
+    targetQueueOverride?: string,
     prefatoryInstructionCode: string = "11",
   ): Promise<void> {
     let sessionToken: string | null = null;
@@ -35,14 +37,15 @@ export class PlaceQueueService extends ProfilesBaseService {
       sessionToken = session.token;
       pooledSessionService = session.service;
 
-      const { sourceQueue, targetQueue, removeFromSource } = this.queueConfig;
+      const { targetQueue, removeFromSource } = this.queueConfig;
+      const destinationQueue = targetQueueOverride || targetQueue;
 
-      logger.info(`[QUEUE MOVE] ${recordLocator} → ${targetQueue}`);
+      logger.info(`[QUEUE MOVE] ${recordLocator} → ${destinationQueue}`);
 
-      // STEP 1 — Place on target queue
+      // STEP 1 — Place on destination queue
       await this.placeOnQueueViaAPI(
         recordLocator,
-        targetQueue,
+        destinationQueue,
         prefatoryInstructionCode,
         pooledSessionService,
       );
@@ -67,6 +70,104 @@ export class PlaceQueueService extends ProfilesBaseService {
         sabreSessionPool.releaseSession(sessionToken);
       }
     }
+  }
+
+  // ==========================================================
+  // MOVE TO ERROR QUEUE — WRAPPER WITH SAFE ERROR HANDLING
+  // ==========================================================
+  public async moveToErrorQueue(
+    recordLocator: string,
+    errorReason?: string,
+  ): Promise<void> {
+    const { errorQueue } = this.queueConfig;
+
+    if (!errorQueue) {
+      logger.warn(
+        `[ERROR QUEUE] No error queue configured, skipping ${recordLocator}`,
+      );
+      return;
+    }
+
+    try {
+      logger.info(
+        `[ERROR QUEUE] ${recordLocator} → ${errorQueue}${errorReason ? ` (Reason: ${errorReason})` : ""}`,
+      );
+
+      await this.moveQueueItem(recordLocator, errorQueue);
+
+      logger.info(`[ERROR QUEUE] ✅ ${recordLocator} moved to error queue`);
+    } catch (error: any) {
+      logger.error(
+        `[ERROR QUEUE] ❌ Failed to move ${recordLocator} to error queue: ${error.message}`,
+      );
+      // Don't throw - we don't want error queue failures to cascade
+    }
+  }
+
+  // ==========================================================
+  // UNIFIED BATCH MOVE
+  // ==========================================================
+  public async batchMoveToQueue(
+    sourceQueue: string,
+    recordLocators: string[],
+    targetQueueOverride?: string,
+    concurrency: number = 1,
+  ): Promise<BatchQueueResult[]> {
+    return this.executeBatchMove(
+      recordLocators,
+      (pnr) => this.moveQueueItem(sourceQueue, pnr, targetQueueOverride),
+      concurrency,
+    );
+  }
+
+  // ==========================================================
+  // BATCH MOVE TO ERROR QUEUE
+  // ==========================================================
+  public async batchMoveToErrorQueue(
+    recordLocators: string[],
+    errorReason?: string,
+    concurrency: number = 1,
+  ): Promise<BatchQueueResult[]> {
+    return this.executeBatchMove(
+      recordLocators,
+      (pnr) => this.moveToErrorQueue(pnr, errorReason),
+      concurrency,
+    );
+  }
+
+  // ==========================================================
+  // PRIVATE: BATCH EXECUTION LOGIC (DRY)
+  // ==========================================================
+  private async executeBatchMove(
+    recordLocators: string[],
+    moveFunction: (pnr: string) => Promise<void>,
+    concurrency: number,
+  ): Promise<BatchQueueResult[]> {
+    const results: BatchQueueResult[] = [];
+    const chunks = this.chunkArray(recordLocators, concurrency);
+
+    for (const chunk of chunks) {
+      const chunkResults = await Promise.allSettled(
+        chunk.map((pnr) => moveFunction(pnr)),
+      );
+
+      for (let i = 0; i < chunkResults.length; i++) {
+        const recordLocator = chunk[i];
+        const result = chunkResults[i];
+
+        if (result.status === "fulfilled") {
+          results.push({ recordLocator, success: true });
+        } else {
+          results.push({
+            recordLocator,
+            success: false,
+            error: result.reason?.message || "Unknown error",
+          });
+        }
+      }
+    }
+
+    return results;
   }
 
   // ==========================================================
@@ -253,39 +354,8 @@ export class PlaceQueueService extends ProfilesBaseService {
   }
 
   // ==========================================================
-  // BATCH MOVE
+  // UTILITY
   // ==========================================================
-  public async batchMoveToQueue(
-    recordLocators: string[],
-    concurrency: number = 1,
-  ): Promise<BatchQueueResult[]> {
-    const results: BatchQueueResult[] = [];
-    const chunks = this.chunkArray(recordLocators, concurrency);
-
-    for (const chunk of chunks) {
-      const chunkResults = await Promise.allSettled(
-        chunk.map((pnr) => this.moveQueueItem(pnr)),
-      );
-
-      for (let i = 0; i < chunkResults.length; i++) {
-        const recordLocator = chunk[i];
-        const result = chunkResults[i];
-
-        if (result.status === "fulfilled") {
-          results.push({ recordLocator, success: true });
-        } else {
-          results.push({
-            recordLocator,
-            success: false,
-            error: result.reason?.message || "Unknown error",
-          });
-        }
-      }
-    }
-
-    return results;
-  }
-
   private chunkArray<T>(array: T[], size: number): T[][] {
     const chunks: T[][] = [];
     for (let i = 0; i < array.length; i += size) {

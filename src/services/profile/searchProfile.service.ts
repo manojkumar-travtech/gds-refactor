@@ -1,3 +1,4 @@
+import { SabreProfileParser } from "../../parsers/sabre-profile.parser";
 import logger from "../../utils/logger";
 import { ProfilesBaseService } from "./profilesBase.service";
 
@@ -54,7 +55,7 @@ export class ProfileSearchService extends ProfilesBaseService {
     criteria: ProfileSearchCriteria,
   ): Promise<ProfileSearchResult> {
     const pageSize = criteria.pageSize || 250;
-    const profileType = criteria.profileType || "ALL";
+    const profileType = criteria.profileType || "TVL";
     const domain = this.sabreConfig.pcc;
     const profileName = criteria.profileName || "*";
     const email = criteria.email;
@@ -82,12 +83,12 @@ export class ProfileSearchService extends ProfilesBaseService {
       });
 
       // Accumulate results
-      allProfiles = [...allProfiles, ...pageResult.profiles];
+      allProfiles = [...allProfiles, ...pageResult?.profiles];
       totalReturned += pageResult.numReturned;
       hasMore = pageResult.hasMore;
 
       logger.info(`Fetched page ${currentPage}`, {
-        profilesInPage: pageResult.profiles.length,
+        profilesInPage: pageResult?.profiles.length,
         totalSoFar: allProfiles.length,
         hasMore,
       });
@@ -104,9 +105,14 @@ export class ProfileSearchService extends ProfilesBaseService {
       totalProfiles: allProfiles.length,
       totalPages: currentPage,
     });
+    const parser = new SabreProfileParser();
+    const parsedProfiles: any[] = [];
 
+    for (const profile of allProfiles) {
+      parsedProfiles.push(parser.parse(profile));
+    }
     return {
-      profiles: allProfiles,
+      profiles: parsedProfiles,
       hasMore: false,
       numReturned: totalReturned,
       pageNumber: currentPage,
@@ -165,8 +171,6 @@ export class ProfileSearchService extends ProfilesBaseService {
       },
       "Sabre_OTA_ProfileSearchRS",
     );
-
-    // Parse response
     return this.parseProfileSearchResponse(response);
   }
 
@@ -249,7 +253,7 @@ export class ProfileSearchService extends ProfilesBaseService {
     return this.searchProfiles({
       profileName,
       pageSize,
-      profileType: "ALL",
+      profileType: "TVL",
     });
   }
 }

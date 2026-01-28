@@ -136,7 +136,6 @@ export class SabreSessionService {
     ) {
       return;
     }
-
     await this.login();
   }
 
@@ -150,7 +149,7 @@ export class SabreSessionService {
       throw new Error("Sabre session token unavailable");
     }
 
-    return this.sessionToken._;
+    return this.sessionToken?._;
   }
 
   async getConversationId() {

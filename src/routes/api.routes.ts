@@ -2,6 +2,7 @@ import express, { Request, Response, Router } from "express";
 import { DeleteProfileService } from "../services/profile/deleteProfile.service";
 import { AccessQueueService } from "../services/queue/accessQueue.service";
 import { runSabreQueueWorker } from "../services/queue/workers/sabreQueue.worker";
+import { ProfileSearchService } from "../services/profile/searchProfile.service";
 
 const router: Router = express.Router();
 
@@ -36,6 +37,31 @@ router.delete("/delete", async (req, res) => {
       success: false,
       error:
         error instanceof Error ? error.message : "Failed to delete profile",
+    });
+  }
+});
+
+router.get("/profile", async (req: Request, res: Response) => {
+  try {
+    const { email } = req.query;
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "email query param is required",
+      });
+    }
+    const profileIns = ProfileSearchService.getInstance();
+    const resw = await profileIns.searchByEmail(email);
+    return res.status(200).json({
+      success: true,
+      data: resw,
+    });
+  } catch (error: any) {
+    console.error("Queue API Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to fetch queue info",
     });
   }
 });

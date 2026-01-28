@@ -5,9 +5,13 @@ import {
 } from "../../../parsers/parsePNRDetails";
 import logger from "../../../utils/logger";
 import { ProfilesBaseService } from "../../profile/profilesBase.service";
-import { ComprehensivePNRParser } from "./comprehensive-pnr-parser";
-import { sabreSessionPool } from "../../sabreSessionPool";
-import { SabreSessionService } from "../../sabreSessionService.service";
+import {
+  CompletePNRData,
+  ComprehensivePNRParser,
+} from "./comprehensive-pnr-parser";
+import { sabreSessionPool } from "../../../sessionManagement/sabreSessionPool";
+import { SabreSessionService } from "../../../sessionManagement/sabreSessionService.service";
+import { PnrService } from "./pnrService.service";
 
 interface ParsedPNRResult {
   pnrNumber?: string;
@@ -26,6 +30,7 @@ export class PnrDetailsService extends ProfilesBaseService {
   private static instance: PnrDetailsService;
   private readonly MAX_RETRIES = 2;
   private readonly RETRY_DELAY = 1000; // milliseconds
+  private pnrService = PnrService.getInstance();
 
   private constructor() {
     super();
@@ -43,7 +48,10 @@ export class PnrDetailsService extends ProfilesBaseService {
    * @returns Parsed PNR details
    * @throws Error if PNR number is invalid or retrieval fails after all retries
    */
-  async getPnrDetails(pnrNumber: string): Promise<ParsedPNRResult> {
+  async getPnrDetails(
+    pnrNumber: string,
+    queue_number: string,
+  ): Promise<ParsedPNRResult> {
     // Validate input
     if (!pnrNumber || typeof pnrNumber !== "string") {
       const error = new Error(
@@ -67,7 +75,7 @@ export class PnrDetailsService extends ProfilesBaseService {
     let sessionService: SabreSessionService | null = null;
 
     try {
-      // 👇 Acquire session from pool
+      // Acquire session from pool
       const session = await sabreSessionPool.acquireSession();
       sessionToken = session.token;
       sessionService = session.service;
@@ -97,7 +105,7 @@ export class PnrDetailsService extends ProfilesBaseService {
             service: "OTA_GetReservationRQ",
             action: "GetReservationRQ",
             body: request,
-            sessionToken: token, // 👈 Use the pooled session token
+            sessionToken: token, //  Use the pooled session token
           };
 
           logger.debug("Sending request to Sabre", {
@@ -124,6 +132,10 @@ export class PnrDetailsService extends ProfilesBaseService {
           const result = await this.parsePnrDetailsResponse(response, cleanPnr);
 
           logger.info("PNR details retrieved successfully", { pnr: cleanPnr });
+          await this.pnrService.storeParsedPNR(
+            result as unknown as CompletePNRData,
+            queue_number,
+          );
           return result;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
@@ -268,13 +280,14 @@ export class PnrDetailsService extends ProfilesBaseService {
       pnrNumber: parsedData.pnr || pnrNumber,
       passengerName,
       profileId,
-      flightInfo: parsedData.flights  || [],
+      flightInfo: parsedData.flights || [],
       carRentalInfo: parsedData.cars || [],
-      hotelInfo: parsedData.hotels  || [],
+      hotelInfo: parsedData.hotels || [],
       rawData: response,
       timestamp: new Date().toISOString(),
-      travelers: parsedData.passengers  || [],
+      travelers: parsedData.passengers || [],
       trips: parsedData.trip || null,
+      ...parsedData,
     };
 
     logger.info("PNR details parsed successfully", {
@@ -294,9 +307,12 @@ export class PnrDetailsService extends ProfilesBaseService {
    * @param pnrNumber - The PNR record locator
    * @returns True if PNR exists and is accessible
    */
-  async validatePnrExists(pnrNumber: string): Promise<boolean> {
+  async validatePnrExists(
+    pnrNumber: string,
+    queue_number: string,
+  ): Promise<boolean> {
     try {
-      await this.getPnrDetails(pnrNumber);
+      await this.getPnrDetails(pnrNumber, queue_number);
       return true;
     } catch (error) {
       logger.warn("PNR validation failed", {

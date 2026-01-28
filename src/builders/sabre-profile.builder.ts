@@ -404,7 +404,7 @@ export class SabreProfileBuilder {
     return mapping[type] || 'O';
   }
 
-  private mapPreferenceLevel(level: PreferenceLevel): string {
+  private mapPreferenceLevel(level: PreferenceLevel | undefined): string  | undefined{
     return level; // Enum values match Sabre strings (Preferred, Acceptable, etc.)
   }
 
@@ -436,7 +436,7 @@ export class SabreProfileBuilder {
     return type; // Enum values match Sabre strings
   }
 
-  private formatExpirationDate(month?: number, year?: number): string | undefined {
+  private formatExpirationDate(month?: number | null | undefined, year?: number | null | undefined): string | undefined {
     if (!month || !year) return undefined;
     const m = month.toString().padStart(2, '0');
     const y = year.toString().slice(-2);

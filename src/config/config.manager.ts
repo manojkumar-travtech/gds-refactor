@@ -13,7 +13,7 @@ export class ConfigManager {
     batchSize: number;
     maxRetries: number;
     delayBetweenPNRs: number;
-    sourceQueue?: string;
+    sourceQueue?: string[];
     targetQueue: string;
     errorQueue?: string;
     removeFromSource: boolean;
@@ -50,7 +50,7 @@ export class ConfigManager {
         process.env.PNR_PROCESSING_DELAY_MS || "1000",
         10,
       ),
-      sourceQueue: process.env.SOURCE_QUEUE,
+      sourceQueue: this.parseSourceQueues(process.env.SOURCE_QUEUE),
       targetQueue: process.env.TARGET_QUEUE || "",
       errorQueue: process.env.ERROR_QUEUE,
       removeFromSource: process.env.REMOVE_FROM_SOURCE === "true",
@@ -95,15 +95,33 @@ export class ConfigManager {
     }
     return value;
   }
+  private parseSourceQueues(value?: string): string[] {
+    if (!value) return [];
 
+    // Try to parse as JSON array first
+    if (value.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // Fall through to comma-separated parsing
+      }
+    }
+
+    // Parse comma-separated values and return as array
+    return value
+      .split(",")
+      .map((q) => q.trim())
+      .filter(Boolean);
+  }
   /**
    * Log configuration (no secrets)
    */
   private logConfiguration(): void {
-    if (this.queue.sourceQueue) {
-      console.log(`Will process only queue: ${this.queue.sourceQueue}`);
+    if (this.queue.sourceQueue?.length) {
+      console.log(`Will process queues: ${this.queue.sourceQueue.join(", ")}`);
     } else {
-      console.log("No source queue specified - will process all queues");
+      console.log("No source queues specified - will process all queues");
     }
   }
 
@@ -117,7 +135,7 @@ export class ConfigManager {
       errors.push("SABRE_PCC is required");
     }
 
-    if (!this.queue.batchSize && !this.queue.errorQueue) {
+    if (!this.queue.targetQueue && !this.queue.errorQueue) {
       errors.push(
         "At least one of TARGET_QUEUE or ERROR_QUEUE must be configured",
       );
