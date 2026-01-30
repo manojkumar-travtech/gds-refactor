@@ -21,6 +21,11 @@ interface DBProfileRow {
   updated_at?: string;
 }
 
+type ProfileChange = {
+  field: string;
+  oldValue: unknown;
+  newValue: unknown;
+};
 export class ProfileDatabaseService extends ProfilesBaseService {
   constructor() {
     super();
@@ -164,5 +169,60 @@ export class ProfileDatabaseService extends ProfilesBaseService {
     };
 
     return mergeObjects(merged, changes);
+  }
+
+  public getProfileChanges<T extends Record<string, any>>(
+    currentProfile: T,
+    newProfile: T,
+  ): ProfileChange[] {
+    const changes: ProfileChange[] = [];
+
+    const compareObjects = (obj1: any, obj2: any, path: string = ""): void => {
+      const keys = new Set<string>([
+        ...Object.keys(obj1 || {}),
+        ...Object.keys(obj2 || {}),
+      ]);
+
+      for (const key of keys) {
+        const currentPath = path ? `${path}.${key}` : key;
+        const val1 = obj1?.[key];
+        const val2 = obj2?.[key];
+
+        // Skip if both undefined or null
+        if (val1 === undefined && val2 === undefined) continue;
+        if (val1 === null && val2 === null) continue;
+
+        // Handle objects
+        if (
+          typeof val1 === "object" &&
+          val1 !== null &&
+          typeof val2 === "object" &&
+          val2 !== null
+        ) {
+          // Arrays → direct comparison
+          if (Array.isArray(val1) || Array.isArray(val2)) {
+            if (JSON.stringify(val1) !== JSON.stringify(val2)) {
+              changes.push({
+                field: currentPath,
+                oldValue: val1,
+                newValue: val2,
+              });
+            }
+          } else {
+            compareObjects(val1, val2, currentPath);
+          }
+        } else if (JSON.stringify(val1) !== JSON.stringify(val2)) {
+          changes.push({
+            field: currentPath,
+            oldValue: val1,
+            newValue: val2,
+          });
+        }
+      }
+    };
+
+    compareObjects(currentProfile, newProfile);
+
+    return changes;
   }
 }

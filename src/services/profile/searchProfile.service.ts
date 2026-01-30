@@ -256,4 +256,46 @@ export class ProfileSearchService extends ProfilesBaseService {
       profileType: "TVL",
     });
   }
+
+  /**
+   * Get profile by Sabre Profile ID using ProfileReadRQ
+   */
+  async getProfileById(profileId: string): Promise<any> {
+    const sessionToken = await this.sessionService.getAccessToken();
+    const domain = this.sabreConfig.pcc;
+
+    logger.info("Fetching profile by ID", { profileId });
+
+    const bodyContent = `
+    <Sabre_OTA_ProfileReadRQ Version="6.90.1" xmlns="http://www.sabre.com/eps/schemas">
+      <Profile>
+        <TPA_Identity 
+          UniqueID="${profileId}"
+          DomainID="${domain}" 
+          ClientCode="${this.sabreConfig.clientCode}" 
+          ClientContextCode="${this.sabreConfig.clientContext}" 
+        />
+      </Profile>
+    </Sabre_OTA_ProfileReadRQ>
+  `;
+
+    // Execute SOAP request
+    const response = await this.soapExecutor.execute(
+      {
+        action: "EPS_EXT_ProfileReadRQ",
+        service: "Sabre_OTA_ProfileReadRQ",
+        body: bodyContent,
+        sessionToken,
+      },
+      "Sabre_OTA_ProfileReadRS",
+    );
+
+    if (response?.Profile) {
+      const parser = new SabreProfileParser();
+      return parser.parse(response.Profile);
+    }
+
+    logger.warn("Profile not found", { profileId });
+    return null;
+  }
 }
