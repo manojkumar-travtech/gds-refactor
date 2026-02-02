@@ -1,108 +1,121 @@
-import { Router, Request, Response } from "express";
-import { CreateProfileService } from "../services/profile/createProfile.service";
-import logger from "../utils/logger";
-import { query } from "../config/database";
-import { ProfileSearchService } from "../services/profile/searchProfile.service";
+import { Router } from "express";
+import { ProfileController } from "../controllers/Profile.controller";
+import { UpdateProfileService } from "../services/profile/updateProfile.service";
 
 const router = Router();
-const profileService = CreateProfileService.getInstance();
-const profileSearchService = ProfileSearchService.getInstance();
+const profileController = new ProfileController();
+const updateService = UpdateProfileService.getInstance();
 
 /**
- * POST /api/profiles/create
+ * POST /api/profiles
+ * Create a new Sabre profile
+ *
+ * Required body fields:
+ * - givenName: string
+ * - surname: string
+ *
+ * Optional body fields:
+ * - phoneNumber: string
+ * - email: string
+ * - address: string
+ * - city: string
+ * - postalCode: string
+ * - stateCode: string
+ * - countryCode: string (default: "US")
+ * - primaryLanguage: string (default: "EN-US")
+ * - clientCode: string (default: "TN")
+ * - profileStatusCode: string (default: "AC")
  */
-router.post("/profiles/create", async (req: Request, res: Response): Promise<Response> => {
-  try {
-    const profileData = req.body;
-
-    const sabreUniqueId = await profileService.createProfile(profileData);
-
-    const saveResult = await query(
-      `INSERT INTO gds.gds_profiles 
-        (profile_id, gds_profile_id, gds_provider, created_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
-       RETURNING *`,
-      [profileData.localProfileId || null, sabreUniqueId, "sabre"]
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "Profile created successfully in Sabre",
-      data: {
-        sabreUniqueId,
-        localRecord: saveResult[0],
-      },
-    });
-  } catch (error: any) {
-    logger.error("Error creating profile:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create profile",
-      error: error.message,
-    });
-  }
-});
+router.post("/profiles", (req, res) =>
+  profileController.createProfile(req, res),
+);
 
 /**
  * GET /api/profiles/:profileId
+ * Get a single profile by Sabre ID
+ *
+ * @param profileId - The Sabre profile unique ID
  */
-router.get("/profiles/:profileId", async (req: Request, res: Response): Promise<Response> => {
-  try {
-    const { profileId } = req.params;
-
-    const profiles = await profileSearchService.getProfileById(String(profileId));
-
-    if (!profiles) {
-      return res.status(404).json({
-        success: false,
-        message: "Profile not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: profiles,
-    });
-  } catch (error: any) {
-    logger.error("Error retrieving profile:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to retrieve profile",
-      error: error.message,
-    });
-  }
-});
+router.get("/profiles/:profileId", (req, res) =>
+  profileController.getProfile(req, res),
+);
 
 /**
- * POST /api/profiles/bulk
+ * POST /api/profiles/batch
+ * Get multiple profiles by IDs
+ *
+ * Body:
+ * {
+ *   "profileIds": ["id1", "id2", "id3"] // array or single string
+ * }
  */
-router.post("/profiles/bulk", async (req: Request, res: Response): Promise<Response> => {
-  try {
-    const { profileIds } = req.body;
+router.post("/profiles/batch", (req, res) =>
+  profileController.getProfiles(req, res),
+);
 
-    if (!Array.isArray(profileIds) || profileIds.length === 0) {
+router.post("/profiles/update", async (req, res) => {
+  try {
+    const {
+      profileId,
+      clientCode,
+      clientContext,
+      domain,
+      customer,
+      remarks,
+      preferences,
+      ignoreSubjectAreas,
+      ignoreTimeStampCheck,
+    } = req.body;
+
+    // Validate required fields
+    if (!profileId || !clientCode || !clientContext || !domain) {
       return res.status(400).json({
         success: false,
-        message: "profileIds must be a non-empty array",
+        error:
+          "Missing required fields: profileId, clientCode, clientContext, domain",
       });
     }
 
-    const profiles = await profileService.getProfilesUnified(profileIds);
+    const result = await updateService.updateProfile({
+      profileId,
+      clientCode,
+      clientContext,
+      domain,
+      customer,
+      remarks,
+      preferences,
+      ignoreSubjectAreas,
+      ignoreTimeStampCheck,
+    });
 
     return res.status(200).json({
       success: true,
-      count: profiles.length,
-      data: profiles,
+      message: "Profile updated successfully",
+      data: result,
     });
   } catch (error: any) {
-    logger.error("Error retrieving profiles:", error);
+    console.error("Profile update error:", error);
+
+    if (error.message?.includes("SIMULTANEOUS_UPDATE")) {
+      return res.status(409).json({
+        success: false,
+        error:
+          "Profile was modified by another user. Please refresh and try again.",
+        errorType: "SIMULTANEOUS_UPDATE",
+      });
+    }
+
+    if (error.message?.includes("Profile not found")) {
+      return res.status(404).json({
+        success: false,
+        error: "Profile not found",
+        errorType: "NOT_FOUND",
+      });
+    }
 
     return res.status(500).json({
       success: false,
-      message: "Failed to retrieve profiles",
-      error: error.message,
+      error: error.message || "Failed to update profile",
     });
   }
 });

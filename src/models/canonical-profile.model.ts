@@ -1,47 +1,25 @@
-/**
- * Canonical Profile Model
- *
- * This module defines the standardized profile structure that all GDS-specific
- * profiles are parsed into. This allows for consistent handling of traveler
- * data regardless of the source system.
- *
- * @module models/canonical-profile
- */
-
-/**
- * Profile type classification
- */
 export enum ProfileType {
   PERSONAL = "PERSONAL",
   BUSINESS = "BUSINESS",
-  GROUP = "GROUP",
   AGENCY = "AGENCY",
+  GROUP = "GROUP",
 }
 
-/**
- * Profile status
- */
 export enum ProfileStatus {
   ACTIVE = "ACTIVE",
   INACTIVE = "INACTIVE",
+  PENDING = "PENDING",
   SUSPENDED = "SUSPENDED",
   DELETED = "DELETED",
-  PENDING = "PENDING",
 }
 
-/**
- * Gender specification
- */
 export enum Gender {
   MALE = "MALE",
   FEMALE = "FEMALE",
-  UNSPECIFIED = "UNSPECIFIED",
   OTHER = "OTHER",
+  UNSPECIFIED = "UNSPECIFIED",
 }
 
-/**
- * Travel document types
- */
 export enum DocumentType {
   PASSPORT = "PASSPORT",
   VISA = "VISA",
@@ -52,21 +30,13 @@ export enum DocumentType {
   OTHER = "OTHER",
 }
 
-/**
- * Payment method types
- */
 export enum PaymentType {
   CREDIT_CARD = "CREDIT_CARD",
   DEBIT_CARD = "DEBIT_CARD",
   BANK_ACCOUNT = "BANK_ACCOUNT",
-  TRAVEL_ACCOUNT = "TRAVEL_ACCOUNT",
-  CORPORATE_CARD = "CORPORATE_CARD",
   OTHER = "OTHER",
 }
 
-/**
- * Preference level for travel preferences
- */
 export enum PreferenceLevel {
   PREFERRED = "PREFERRED",
   ACCEPTABLE = "ACCEPTABLE",
@@ -75,9 +45,6 @@ export enum PreferenceLevel {
   UNSPECIFIED = "UNSPECIFIED",
 }
 
-/**
- * Seat position preferences
- */
 export enum SeatPosition {
   WINDOW = "WINDOW",
   AISLE = "AISLE",
@@ -85,27 +52,18 @@ export enum SeatPosition {
   ANY = "ANY",
 }
 
-/**
- * Smoking preferences
- */
 export enum SmokingPreference {
   SMOKING = "SMOKING",
   NON_SMOKING = "NON_SMOKING",
   NO_PREFERENCE = "NO_PREFERENCE",
 }
 
-/**
- * Vehicle transmission type
- */
 export enum TransmissionType {
   AUTOMATIC = "AUTOMATIC",
   MANUAL = "MANUAL",
   NO_PREFERENCE = "NO_PREFERENCE",
 }
 
-/**
- * Remark/note types
- */
 export enum RemarkType {
   GENERAL = "GENERAL",
   INVOICE = "INVOICE",
@@ -114,39 +72,34 @@ export enum RemarkType {
   HIDDEN = "HIDDEN",
   CORPORATE = "CORPORATE",
   ACCOUNTING = "ACCOUNTING",
-  CUSTOM = "CUSTOM",
+  PRIORITY = "PRIORITY",
 }
 
-/**
- * Source GDS system
- */
 export enum GDSSource {
   SABRE = "SABRE",
   AMADEUS = "AMADEUS",
   GALILEO = "GALILEO",
   WORLDSPAN = "WORLDSPAN",
-  APOLLO = "APOLLO",
+  TRAVELPORT = "TRAVELPORT",
   OTHER = "OTHER",
 }
 
-/**
- * Personal information
- */
+// ============================================================================
+// INTERFACES
+// ============================================================================
+
 export interface PersonalInfo {
   title?: string;
   firstName?: string;
   middleName?: string;
   lastName?: string;
   suffix?: string;
-  preferredName?: string;
   dob?: Date;
   gender?: Gender;
   nationality?: string;
+  countryOfResidence?: string;
 }
 
-/**
- * Email address
- */
 export interface EmailAddress {
   type: string;
   address: string;
@@ -154,9 +107,6 @@ export interface EmailAddress {
   verified?: boolean;
 }
 
-/**
- * Phone number
- */
 export interface PhoneNumber {
   type: string;
   number: string;
@@ -166,9 +116,6 @@ export interface PhoneNumber {
   verified?: boolean;
 }
 
-/**
- * Physical address
- */
 export interface Address {
   type: string;
   line1?: string;
@@ -182,18 +129,12 @@ export interface Address {
   validated?: boolean;
 }
 
-/**
- * Contact information
- */
 export interface ContactInfo {
   emails: EmailAddress[];
   phones: PhoneNumber[];
   addresses: Address[];
 }
 
-/**
- * Employment information
- */
 export interface EmploymentInfo {
   company?: string;
   title?: string;
@@ -209,22 +150,19 @@ export interface EmploymentInfo {
   manager?: string;
 }
 
-/**
- * Emergency contact
- */
 export interface EmergencyContact {
   firstName?: string;
   lastName?: string;
+  title?: string;
+  suffix?: string;
   relationship?: string;
   phone?: string;
   email?: string;
   address?: Address;
+  dateOfBirth?: Date;
   primary?: boolean;
 }
 
-/**
- * Related traveler
- */
 export interface RelatedTraveler {
   firstName?: string;
   lastName?: string;
@@ -235,9 +173,6 @@ export interface RelatedTraveler {
   profileId?: string;
 }
 
-/**
- * Travel document
- */
 export interface TravelDocument {
   type: DocumentType;
   number: string;
@@ -248,12 +183,8 @@ export interface TravelDocument {
   holderName?: string;
   issueLocation?: string;
   primary?: boolean;
-  issueDate?: Date;
 }
 
-/**
- * Loyalty program membership
- */
 export interface LoyaltyProgram {
   programName: string;
   providerType: string;
@@ -264,101 +195,70 @@ export interface LoyaltyProgram {
   primary?: boolean;
 }
 
-/**
- * Payment method
- */
 export interface PaymentMethod {
   type: PaymentType;
   cardType?: string;
   maskedNumber?: string;
   expiration?: string;
   holderName?: string;
-  billingAddress?: Address;
   primary?: boolean;
-  expirationMonth?: number;
-  expirationYear?: number;
 }
 
-/**
- * Seat preference details
- */
 export interface SeatPreference {
   position?: SeatPosition;
   location?: string;
   type?: string;
-  characteristics?: string[];
 }
 
-/**
- * Airline preference
- */
 export interface AirlinePreference {
   airline?: string;
-  level?: PreferenceLevel;
+  level: PreferenceLevel;
   seat?: SeatPreference;
   meal?: string;
   specialService?: string[];
-  notes?: string;
 }
 
-/**
- * Hotel preference
- */
 export interface HotelPreference {
   chain?: string;
-  level?: PreferenceLevel;
+  level: PreferenceLevel;
   roomType?: string;
   smokingPreference?: SmokingPreference;
   bedType?: string;
   floor?: string;
-  amenities?: string[];
-  notes?: string;
+  maxRate?: string;
+  currency?: string;
 }
 
-/**
- * Car rental preference
- */
 export interface CarPreference {
   vendor?: string;
-  level?: PreferenceLevel;
+  level: PreferenceLevel;
   vehicleType?: string;
   transmission?: TransmissionType;
   airConditioning?: boolean;
-  notes?: string;
+  maxRate?: string;
+  currency?: string;
 }
 
-/**
- * Travel preferences
- */
 export interface TravelPreferences {
   airlines: AirlinePreference[];
   hotels: HotelPreference[];
   cars: CarPreference[];
 }
 
-/**
- * Travel policy information
- */
 export interface TravelPolicy {
   name: string;
   policyId?: string;
   allowance?: string;
-  restrictions?: string[];
+  restrictions: string[];
   approvalRequired?: boolean;
 }
 
-/**
- * Tax information
- */
 export interface TaxInfo {
   taxId: string;
   type?: string;
   country?: string;
 }
 
-/**
- * Remark/note
- */
 export interface Remark {
   type: RemarkType;
   category?: string;
@@ -368,22 +268,15 @@ export interface Remark {
   source?: string;
 }
 
-/**
- * Profile metadata
- */
 export interface ProfileMetadata {
   sourceGDS: GDSSource;
   sourceId: string;
   sourcePCC: string;
   lastSyncDate: Date;
   syncVersion: string;
-  customFields?: Record<string, any>;
-  tags?: string[];
+  customFields: Record<string, any>;
 }
 
-/**
- * Main canonical profile structure
- */
 export interface CanonicalProfile {
   // Identity
   id: string;
@@ -411,36 +304,31 @@ export interface CanonicalProfile {
 
   // Policy & Compliance
   travelPolicy?: TravelPolicy;
-  taxInfo?: TaxInfo[];
+  taxInfo: TaxInfo[];
 
   // Additional Data
   remarks: Remark[];
   metadata: ProfileMetadata;
 }
 
-/**
- * Validation result
- */
+// ============================================================================
+// VALIDATION
+// ============================================================================
+
+export interface ValidationError {
+  field?: string;
+  message: string;
+  code: string;
+}
+
+export interface ValidationWarning {
+  field?: string;
+  message: string;
+  code: string;
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
   warnings: ValidationWarning[];
-}
-
-/**
- * Validation error
- */
-export interface ValidationError {
-  field: string;
-  message: string;
-  code: string;
-}
-
-/**
- * Validation warning
- */
-export interface ValidationWarning {
-  field: string;
-  message: string;
-  code: string;
 }

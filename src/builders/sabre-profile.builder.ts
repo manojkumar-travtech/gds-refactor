@@ -7,11 +7,6 @@ import {
   PhoneNumber,
   Address,
   EmploymentInfo,
-  TravelDocument,
-  DocumentType,
-  LoyaltyProgram,
-  PaymentMethod,
-  PaymentType,
   TravelPreferences,
   PreferenceLevel,
   Remark,
@@ -188,9 +183,6 @@ export class SabreProfileBuilder {
         Telephone: this.buildPhones(profile.contact.phones),
         Email: this.buildEmails(profile.contact.emails),
         Address: this.buildAddresses(profile.contact.addresses),
-        CustLoyalty: this.buildLoyalty(profile.loyalty),
-        PaymentForm: this.buildPaymentMethods(profile.paymentMethods),
-        Document: this.buildDocuments(profile.documents),
       },
       PrefCollections: this.buildPreferences(profile.preferences),
     };
@@ -274,61 +266,6 @@ export class SabreProfileBuilder {
         },
       },
     };
-  }
-
-  private buildDocuments(docs: TravelDocument[]): any[] {
-    return docs.map((d) => ({
-      $: {
-        DocTypeCode: this.mapDocumentType(d.type),
-        DocID: d.number,
-        DocIssueCountryCode: d.issuingCountry,
-        DocHolderNationality: d.citizenship,
-        EffectiveDate: d.issueDate
-          ? d.issueDate.toISOString().split("T")[0]
-          : undefined,
-        ExpireDate: d.expirationDate
-          ? d.expirationDate.toISOString().split("T")[0]
-          : undefined,
-        DocHolderGivenName: d.holderName
-          ? d.holderName.split(" ")[0]
-          : undefined,
-        DocHolderSurName: d.holderName
-          ? d.holderName.split(" ").slice(1).join(" ")
-          : undefined,
-      },
-    }));
-  }
-
-  private buildLoyalty(programs: LoyaltyProgram[]): any[] {
-    return programs.map((p) => ({
-      $: {
-        ProgramID: p.programName,
-        MembershipID: p.number,
-        LoyalLevel: p.tier,
-        VendorCode: p.providerName,
-        ExpireDate: p.expirationDate
-          ? p.expirationDate.toISOString().split("T")[0]
-          : undefined,
-      },
-    }));
-  }
-
-  private buildPaymentMethods(payments: PaymentMethod[]): any[] {
-    return payments
-      .filter((p) => p.type === PaymentType.CREDIT_CARD)
-      .map((p) => ({
-        PaymentCard: {
-          $: {
-            CardType: p.cardType,
-            CardNumber: p.maskedNumber, // Note: In real scenario, this should be token or full number if PCI compliant
-            ExpireDate: this.formatExpirationDate(
-              p.expirationMonth,
-              p.expirationYear,
-            ),
-            CardHolderName: p.holderName,
-          },
-        },
-      }));
   }
 
   private buildPreferences(prefs: TravelPreferences): any {
@@ -456,18 +393,6 @@ export class SabreProfileBuilder {
     return "H";
   }
 
-  private mapDocumentType(type: DocumentType): string {
-    const mapping: Record<string, string> = {
-      [DocumentType.PASSPORT]: "P",
-      [DocumentType.VISA]: "V",
-      [DocumentType.NATIONAL_ID]: "N",
-      [DocumentType.DRIVERS_LICENSE]: "D",
-      [DocumentType.KNOWN_TRAVELER_NUMBER]: "KTN",
-      [DocumentType.REDRESS_NUMBER]: "REDRESS",
-    };
-    return mapping[type] || "O";
-  }
-
   private mapPreferenceLevel(
     level: PreferenceLevel | undefined,
   ): string | undefined {
@@ -500,15 +425,5 @@ export class SabreProfileBuilder {
 
   private mapRemarkType(type: RemarkType): string {
     return type; // Enum values match Sabre strings
-  }
-
-  private formatExpirationDate(
-    month?: number | null | undefined,
-    year?: number | null | undefined,
-  ): string | undefined {
-    if (!month || !year) return undefined;
-    const m = month.toString().padStart(2, "0");
-    const y = year.toString().slice(-2);
-    return `${m}${y}`;
   }
 }

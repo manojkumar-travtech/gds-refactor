@@ -1,51 +1,55 @@
 import logger from "../../utils/logger";
 import { ProfileDatabaseService } from "../apex/profileFromApex.service";
-import { CreateProfileService } from "./createProfile.service";
+import { ProfileSearchService } from "./searchProfile.service";
+import { UpdateProfilePayload, updateSabreProfile } from "./updateProfileRequest";
 
-export class UpdateProfiles extends ProfileDatabaseService {
-  private readonly createProfileService = CreateProfileService.getInstance();
-  constructor() {
+
+export class UpdateProfileService extends ProfileDatabaseService {
+  private static instance: UpdateProfileService;
+
+  private constructor() {
     super();
   }
-  public async updateProfile(profile: any) {
-    if (!profile.id) {
-      throw new Error("Cannot update profile without ID");
+
+  public static getInstance(): UpdateProfileService {
+    if (!UpdateProfileService.instance) {
+      UpdateProfileService.instance = new UpdateProfileService();
     }
-    logger.info("Processing profile update for ID:", profile.id);
+    return UpdateProfileService.instance;
+  }
+
+  public async updateProfile(payload: UpdateProfilePayload) {
     try {
-      const dbProfile = await this.getCompleteProfileFromDatabase(profile.id);
+      logger.info(`Starting profile update for: ${payload.profileId}`);
 
-      if (!dbProfile) {
-        throw new Error(`Profile ${profile.id} not found in database`);
-      }
-      const currentProfile = await this.createProfileService.getProfilesUnified(
-        profile.id,
-      );
-      if (!currentProfile) {
-        logger.info(`Profile ${profile.id} not found in Sabre, cannot update`);
-        throw new Error(`Profile ${profile.id} not found in Sabre`);
-      }
-      const updatedProfile = this.mergeProfileChanges(dbProfile, profile);
+      let currentProfile = null;
 
-      // Step 4: Compare profiles to detect changes
-      const changes = this.getProfileChanges(currentProfile, updatedProfile);
-
-      if (changes.length === 0) {
-        console.log(
-          `No changes detected for profile ${profile.id}, skipping update`,
+      if (!payload.ignoreTimeStampCheck) {
+        const profileSearchService = ProfileSearchService.getInstance();
+        currentProfile = await profileSearchService.getProfileById(
+          String(payload.profileId),
         );
-        return { updated: false, changes: [] };
+
+        if (!currentProfile) {
+          throw new Error(`Profile not found: ${payload.profileId}`);
+        }
+
+        if (!currentProfile.UpdateDateTime) {
+          logger.warn(
+            `Profile ${payload.profileId} missing UpdateDateTime, will use current timestamp`,
+          );
+        }
+      } else {
+        logger.info(
+          "Skipping timestamp validation (ignoreTimeStampCheck=true)",
+        );
       }
 
-      logger.info(
-        `Found ${changes.length} changes for profile ${profile.id}, proceeding with update`,
-      );
-
-      const requestObj = this.profileBuilder.buildUpdateRequest(
-        updatedProfile,
-        currentProfile[0],
-      );
+      const requestObj = updateSabreProfile(payload, currentProfile);
       const bodyXml = this.xmlBuilder.buildObject(requestObj);
+
+      logger.debug("Generated XML request:", bodyXml);
+
       const sessionToken = await this.sessionService.getAccessToken();
 
       const response = await this.soapExecutor.execute<any>(
@@ -58,33 +62,84 @@ export class UpdateProfiles extends ProfileDatabaseService {
         "Sabre_OTA_ProfileUpdateRS",
       );
 
-      const errors =
-        response?.Errors ||
-        response?.ResponseMessage?.Errors ||
-        response?.Error;
+      const errors = this.extractErrors(response);
 
       if (errors) {
-        const errorMessage =
-          errors.Error?._ ||
-          errors.Error?.$?.ShortText ||
-          errors.ErrorMessage?._ ||
-          JSON.stringify(errors);
-        logger.error("Sabre profile creation error:", errorMessage);
-        throw new Error(`Sabre profile creation failed: ${errorMessage}`);
+        logger.error("Sabre profile update error:", errors);
+
+        if (errors.includes("SIMULTANEOUS_UPDATE")) {
+          throw new Error(
+            `Profile was updated by another user. Please refresh and try again.`,
+          );
+        }
+
+        throw new Error(`Sabre profile update failed: ${errors}`);
       }
-      logger.info(
-        `Successfully updated profile ${profile.id} with ${changes.length} changes`,
-      );
+
+      const success = response?.ResponseMessage?.Success;
+
+      if (!success) {
+        logger.warn("No explicit success element in response");
+      }
+
+      logger.info(`Successfully updated profile ${payload.profileId}`);
+
       return {
-        updated: true,
-        changes,
-        profileId: profile.id,
+        success: true,
+        profileId: payload.profileId,
+        uniqueId: response?.Profile?.UniqueID || payload.profileId,
         timestamp: new Date().toISOString(),
+        response: response,
       };
     } catch (error) {
+      logger.error("Profile update failed:", error);
       throw new Error(
-        `Sabre profile update failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        `Sabre profile update failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
       );
     }
+  }
+
+  private extractErrors(response: any): string | null {
+    const errorSources = [
+      response?.Errors,
+      response?.ResponseMessage?.Errors,
+      response?.Error,
+    ];
+
+    for (const errorSource of errorSources) {
+      if (errorSource) {
+        if (errorSource.ErrorMessage) {
+          if (Array.isArray(errorSource.ErrorMessage)) {
+            return errorSource.ErrorMessage.map(
+              (e: any) => e._ || e.$?.ShortText || e.toString(),
+            ).join("; ");
+          }
+          return (
+            errorSource.ErrorMessage._ ||
+            errorSource.ErrorMessage.$?.ShortText ||
+            errorSource.ErrorMessage.toString()
+          );
+        }
+
+        if (errorSource.Error) {
+          if (Array.isArray(errorSource.Error)) {
+            return errorSource.Error.map(
+              (e: any) => e._ || e.$?.ShortText || e.toString(),
+            ).join("; ");
+          }
+          return (
+            errorSource.Error._ ||
+            errorSource.Error.$?.ShortText ||
+            errorSource.Error.toString()
+          );
+        }
+
+        return JSON.stringify(errorSource);
+      }
+    }
+
+    return null;
   }
 }
