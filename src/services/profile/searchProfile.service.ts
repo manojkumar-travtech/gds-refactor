@@ -55,7 +55,7 @@ export class ProfileSearchService extends ProfilesBaseService {
     criteria: ProfileSearchCriteria,
   ): Promise<ProfileSearchResult> {
     const pageSize = criteria.pageSize || 250;
-    const profileType = criteria.profileType || "TVL";
+    const profileType = criteria.profileType || "ALL";
     const domain = this.sabreConfig.pcc;
     const profileName = criteria.profileName || "*";
     const email = criteria.email;
@@ -124,44 +124,45 @@ export class ProfileSearchService extends ProfilesBaseService {
    * Fetch a single page of profiles
    */
   private async fetchProfilePage(params: {
-    profileName: string;
-    email?: string;
-    profileType: string;
-    domain: string;
-    currentPage: number;
-    pageSize: number;
-  }): Promise<{ profiles: any[]; hasMore: boolean; numReturned: number }> {
-    const { profileName, email, profileType, domain, currentPage, pageSize } =
-      params;
+  profileName: string;
+  email?: string;
+  profileType: string;
+  domain: string;
+  currentPage: number;
+  pageSize: number;
+}): Promise<{ profiles: any[]; hasMore: boolean; numReturned: number }> {
+  const { profileName, email, profileType, domain, currentPage, pageSize } = params;
 
-    // Build email condition if provided
-    const emailCondition = email ? `<Email EmailAddress="${email}" />` : "";
+  const emailCondition = email ? `<Email EmailAddress="${email}" />` : "";
 
-    // Build request body
-    const bodyContent = `
-      <Sabre_OTA_ProfileSearchRQ Version="6.90.1" xmlns="http://www.sabre.com/eps/schemas">
-        <ProfileSearchCriteria ProfileNameOnly="N" PageNumber="${currentPage}" ReturnCount="${pageSize}">
-          <TPA_Identity 
-            ProfileName="${profileName}" 
-            DomainID="${domain}" 
-            ProfileTypeCode="${profileType}" 
-            ClientCode="${this.sabreConfig.clientCode}" 
-            ClientContextCode="${this.sabreConfig.clientContext}" 
-          />
-          ${emailCondition}
-        </ProfileSearchCriteria>
-      </Sabre_OTA_ProfileSearchRQ>
-    `;
+  const bodyContent = `
+    <Sabre_OTA_ProfileSearchRQ Version="6.90.1" xmlns="http://www.sabre.com/eps/schemas">
+      <ProfileSearchCriteria ProfileNameOnly="N" PageNumber="${currentPage}" ReturnCount="${pageSize}">
+        <TPA_Identity 
+          ProfileName="${profileName}" 
+          DomainID="${domain}" 
+          ProfileTypeCode="${profileType}" 
+          ClientCode="${this.sabreConfig.clientCode}" 
+          ClientContextCode="${this.sabreConfig.clientContext}" 
+        />
+        ${emailCondition}
+      </ProfileSearchCriteria>
+    </Sabre_OTA_ProfileSearchRQ>
+  `;
 
-    // Get session token
-    const sessionToken = await this.sessionService.getAccessToken();
+  // 🔍 ADD THIS LOGGING
+  logger.info("SOAP Request Details", {
+    profileName,
+    profileType,
+    domain,
+    currentPage,
+    pageSize,
+    bodyPreview: bodyContent.substring(0, 300), // Log first 300 chars
+  });
 
-    logger.debug("Fetching profile page", {
-      page: currentPage,
-      pageSize,
-    });
+  const sessionToken = await this.sessionService.getAccessToken();
 
-    // Execute SOAP request
+  try {
     const response = await this.soapExecutor.execute<SabreProfileSearchRS>(
       {
         action: "EPS_EXT_ProfileSearchRQ",
@@ -172,7 +173,17 @@ export class ProfileSearchService extends ProfilesBaseService {
       "Sabre_OTA_ProfileSearchRS",
     );
     return this.parseProfileSearchResponse(response);
+  } catch (error: any) {
+    // 🔍 ADD THIS ERROR LOGGING
+    logger.error("Sabre API Error", {
+      message: error.message,
+      responseData: error.response?.data,
+      status: error.response?.status,
+      requestBody: bodyContent, // Log full request on error
+    });
+    throw error;
   }
+}
 
   /**
    * Parse profile search response

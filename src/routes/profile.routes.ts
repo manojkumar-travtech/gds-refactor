@@ -26,7 +26,10 @@ const updateService = UpdateProfileService.getInstance();
  * - clientCode: string (default: "TN")
  * - profileStatusCode: string (default: "AC")
  */
-router.post("/profiles", (req, res) =>
+router.get("/profiles/sabre", (req, res) =>
+  profileController.getProfilesFromSabre(req, res),
+);
+router.post("/profile/create", (req, res) =>
   profileController.createProfile(req, res),
 );
 

@@ -115,4 +115,18 @@ export class ProfileController {
       });
     }
   }
+  public async getProfilesFromSabre(
+    _req: Request,
+    res: Response,
+  ): Promise<void> {
+    const result = await this.profileService.searchProfiles({
+      pageSize: 250,
+    });
+
+    res.status(200).json({
+      success: true,
+      totalProfiles: result.profiles.length,
+      profiles: result.profiles,
+    });
+  }
 }

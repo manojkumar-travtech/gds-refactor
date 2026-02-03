@@ -24,4 +24,45 @@ export abstract class ProfilesBaseService extends BaseSabreService {
   protected async delay(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
+  public extractErrors(response: any): string | null {
+    const errorSources = [
+      response?.Errors,
+      response?.ResponseMessage?.Errors,
+      response?.Error,
+    ];
+
+    for (const errorSource of errorSources) {
+      if (errorSource) {
+        if (errorSource.ErrorMessage) {
+          if (Array.isArray(errorSource.ErrorMessage)) {
+            return errorSource.ErrorMessage.map(
+              (e: any) => e._ || e.$?.ShortText || e.toString(),
+            ).join("; ");
+          }
+          return (
+            errorSource.ErrorMessage._ ||
+            errorSource.ErrorMessage.$?.ShortText ||
+            errorSource.ErrorMessage.toString()
+          );
+        }
+
+        if (errorSource.Error) {
+          if (Array.isArray(errorSource.Error)) {
+            return errorSource.Error.map(
+              (e: any) => e._ || e.$?.ShortText || e.toString(),
+            ).join("; ");
+          }
+          return (
+            errorSource.Error._ ||
+            errorSource.Error.$?.ShortText ||
+            errorSource.Error.toString()
+          );
+        }
+
+        return JSON.stringify(errorSource);
+      }
+    }
+
+    return null;
+  }
 }

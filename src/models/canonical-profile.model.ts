@@ -4,6 +4,7 @@ export enum ProfileType {
   AGENCY = "AGENCY",
   GROUP = "GROUP",
 }
+export type SabreProfileType = "TVL" | "AGT" | "CRP" | "GRP" | string;
 
 export enum ProfileStatus {
   ACTIVE = "ACTIVE",
@@ -281,7 +282,7 @@ export interface CanonicalProfile {
   // Identity
   id: string;
   profileName?: string;
-  type: ProfileType;
+  type: SabreProfileType;
   domain?: string;
   status: ProfileStatus;
   created?: Date;

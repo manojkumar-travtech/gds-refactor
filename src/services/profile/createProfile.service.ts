@@ -3,6 +3,126 @@ import { SabreProfileParser } from "../../parsers/sabre-profile.parser";
 import logger from "../../utils/logger";
 import { ProfilesBaseService } from "./profilesBase.service";
 
+export interface CreateProfileInput {
+  givenName: string;
+  surname: string;
+  phoneNumber?: string;
+  email?: string;
+  address?: string;
+  city?: string;
+  postalCode?: string;
+  stateCode?: string;
+  countryCode?: string;
+  primaryLanguage?: string;
+  clientCode?: string;
+  profileStatusCode?: string;
+}
+
+function chunkArray<T>(arr: T[], size = 10): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function validateCreateProfile(input: CreateProfileInput) {
+  if (!input.givenName || !input.surname) {
+    throw new Error("givenName and surname are required");
+  }
+}
+
+function buildCreateProfileRQ(
+  profile: CreateProfileInput,
+  config: { pcc: string; clientCode: string },
+) {
+  const now = new Date().toISOString();
+  const profileName = `${profile.givenName} ${profile.surname}`;
+
+  return {
+    Sabre_OTA_ProfileCreateRQ: {
+      $: {
+        xmlns: "http://www.sabre.com/eps/schemas",
+        Target: "Production",
+        TimeStamp: now,
+        Version: "6.90.1",
+      },
+      Profile: {
+        $: {
+          CreateDateTime: now,
+          UpdateDateTime: now,
+          PrimaryLanguageIDCode: profile.primaryLanguage ?? "EN-US",
+        },
+        TPA_Identity: {
+          $: {
+            UniqueID: "*",
+            ProfileTypeCode: "TVL",
+            ClientCode: profile.clientCode ?? "TN",
+            ClientContextCode: config.clientCode,
+            DomainID: config.pcc,
+            ProfileName: profileName,
+            ProfileStatusCode: profile.profileStatusCode ?? "AC",
+            ProfileNameModifyIndicator: "Y",
+          },
+        },
+        Traveler: {
+          Customer: {
+            PersonName: {
+              GivenName: profile.givenName,
+              SurName: profile.surname,
+            },
+            ...(profile.phoneNumber && {
+              Telephone: { FullPhoneNumber: profile.phoneNumber },
+            }),
+            ...(profile.email && {
+              Email: { $: { EmailAddress: profile.email } },
+            }),
+            ...(profile.address &&
+              profile.city && {
+                Address: {
+                  AddressLine: profile.address,
+                  CityName: profile.city,
+                  PostalCd: profile.postalCode,
+                  StateCode: profile.stateCode,
+                  CountryCode: profile.countryCode ?? "US",
+                },
+              }),
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildBulkReadRQ(
+  profileIds: string[],
+  config: { pcc: string; clientCode: string },
+): string {
+  const profilesXml = profileIds
+    .map(
+      (id) => `
+      <Profile ProfileTypeCode="TVL">
+        <Identity ClientCode="${config.clientCode}" DomainID="${config.pcc}">
+          <UniqueID>${id}</UniqueID>
+        </Identity>
+      </Profile>
+    `,
+    )
+    .join("");
+
+  return `
+    <Sabre_OTA_ProfileBulkReadRQ
+      Target="Production"
+      TimeStamp="${new Date().toISOString()}"
+      Version="6.90.1"
+      xmlns="http://www.sabre.com/eps/schemas">
+      <Profiles>
+        ${profilesXml}
+      </Profiles>
+    </Sabre_OTA_ProfileBulkReadRQ>
+  `;
+}
+
 export class CreateProfileService extends ProfilesBaseService {
   private static instance: CreateProfileService;
 
@@ -17,108 +137,17 @@ export class CreateProfileService extends ProfilesBaseService {
     return CreateProfileService.instance;
   }
 
-  /**
-   * Creates a Sabre profile and returns the UniqueID
-   */
-  public async createProfile(profile: any): Promise<string> {
+  public async createProfile(profile: CreateProfileInput): Promise<string> {
     try {
+      validateCreateProfile(profile);
+
+      const requestObj = buildCreateProfileRQ(profile, {
+        pcc: this.sabreConfig.pcc,
+        clientCode: this.sabreConfig.clientCode,
+      });
+
       const sessionToken = await this.sessionService.getAccessToken();
-      const now = new Date().toISOString();
-
-      // Extract profile data with defaults
-      const {
-        givenName,
-        surname,
-        phoneNumber,
-        email,
-        address,
-        city,
-        postalCode,
-        stateCode,
-        countryCode = "US",
-        primaryLanguage = "EN-US",
-        clientCode = "TN",
-        profileStatusCode = "AC",
-      } = profile;
-
-      // Validate required fields
-      if (!givenName || !surname) {
-        throw new Error(
-          "First name (givenName) and last name (surname) are required",
-        );
-      }
-
-      // Build profile name
-      const profileName = `${givenName} ${surname}`;
-
-      const requestBody = {
-        Sabre_OTA_ProfileCreateRQ: {
-          $: {
-            xmlns: "http://www.sabre.com/eps/schemas",
-            "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
-            Target: "Production",
-            TimeStamp: now,
-            Version: "6.90.1",
-          },
-
-          Profile: {
-            $: {
-              CreateDateTime: now,
-              UpdateDateTime: now,
-              PrimaryLanguageIDCode: primaryLanguage,
-            },
-
-            TPA_Identity: {
-              $: {
-                UniqueID: "*",
-                ProfileTypeCode: "TVL",
-                ClientCode: clientCode,
-                ClientContextCode: this.sabreConfig.clientCode,
-                DomainID: this.sabreConfig.pcc,
-                ProfileName: profileName,
-                ProfileStatusCode: profileStatusCode,
-                ProfileNameModifyIndicator: "Y",
-              },
-            },
-
-            Traveler: {
-              Customer: {
-                PersonName: {
-                  GivenName: givenName,
-                  SurName: surname,
-                },
-
-                ...(phoneNumber && {
-                  Telephone: {
-                    FullPhoneNumber: phoneNumber,
-                  },
-                }),
-
-                ...(email && {
-                  Email: {
-                    $: {
-                      EmailAddress: email,
-                    },
-                  },
-                }),
-
-                ...(address &&
-                  city && {
-                    Address: {
-                      AddressLine: address,
-                      CityName: city,
-                      ...(postalCode && { PostalCd: postalCode }),
-                      ...(stateCode && { StateCode: stateCode }),
-                      CountryCode: countryCode,
-                    },
-                  }),
-              },
-            },
-          },
-        },
-      };
-
-      const bodyXml = this.xmlBuilder.buildObject(requestBody);
+      const bodyXml = this.xmlBuilder.buildObject(requestObj);
 
       const response = await this.soapExecutor.execute<any>(
         {
@@ -130,19 +159,10 @@ export class CreateProfileService extends ProfilesBaseService {
         "Sabre_OTA_ProfileCreateRS",
       );
 
-      const errors =
-        response?.Errors ||
-        response?.ResponseMessage?.Errors ||
-        response?.Error;
-
+      const errors = this.extractErrors(response);
       if (errors) {
-        const errorMessage =
-          errors.Error?._ ||
-          errors.Error?.$?.ShortText ||
-          errors.ErrorMessage?._ ||
-          errors.ErrorMessage ||
-          JSON.stringify(errors);
-        throw new Error(`Sabre profile creation failed: ${errorMessage}`);
+        logger.error("Sabre profile creation error:", errors);
+        throw new Error(`Sabre profile creation failed: ${errors}`);
       }
 
       const uniqueId =
@@ -151,16 +171,14 @@ export class CreateProfileService extends ProfilesBaseService {
         response?.Profile?.$?.UniqueID;
 
       if (!uniqueId) {
-        throw new Error("Sabre profile created but no UniqueID returned");
+        throw new Error("Profile created but UniqueID missing");
       }
 
-      logger.info(`Sabre profile created successfully: ${uniqueId}`);
+      logger.info(`Sabre profile created: ${uniqueId}`);
       return uniqueId;
     } catch (error: any) {
       logger.error("CreateProfileService.createProfile failed:", error);
-      throw new Error(
-        error?.message || "Unexpected error during profile creation",
-      );
+      throw new Error(error?.message || "Unexpected profile creation error");
     }
   }
 
@@ -168,105 +186,45 @@ export class CreateProfileService extends ProfilesBaseService {
     const ids = Array.isArray(profileIds) ? profileIds : [profileIds];
     if (!ids.length) return [];
 
-    try {
-      const idMap = await this.fetchGdsProfileIdsBatch(ids);
+    const idMap = await this.fetchGdsProfileIdsBatch(ids);
+    const resolvedIds = ids
+      .map((id) => idMap.get(id))
+      .filter(Boolean) as string[];
 
-      const resolvedIds: string[] = [];
-
-      for (const id of ids) {
-        const gdsId = idMap.get(id);
-        if (!gdsId) continue;
-        resolvedIds.push(gdsId);
-      }
-
-      if (!resolvedIds.length) return [];
-
-      return await this.getMultipleProfiles(resolvedIds);
-    } catch (error) {
-      logger.error("Error in getProfilesUnified:", error);
-      throw error;
-    }
+    if (!resolvedIds.length) return [];
+    return this.getMultipleProfiles(resolvedIds);
   }
 
   private async getMultipleProfiles(profileIds: string[]): Promise<any[]> {
-    if (!profileIds.length) return [];
-
     const sessionToken = await this.sessionService.getAccessToken();
-    const BATCH_SIZE = 10;
     const allProfiles: any[] = [];
 
-    for (let i = 0; i < profileIds.length; i += BATCH_SIZE) {
-      const batchIds = profileIds.slice(i, i + BATCH_SIZE);
-      const bodyContent = this.buildBulkProfileRequest(batchIds);
+    for (const batch of chunkArray(profileIds, 10)) {
+      const bodyXml = buildBulkReadRQ(batch, {
+        pcc: this.sabreConfig.pcc,
+        clientCode: this.sabreConfig.clientCode,
+      });
 
-      const bulkReadRS = await this.soapExecutor.execute(
+      const rs = await this.soapExecutor.execute<any>(
         {
           service: "Sabre_OTA_ProfileBulkReadRQ",
           action: "EPS_EXT_ProfileBulkReadRQ",
-          body: bodyContent,
+          body: bodyXml,
           sessionToken,
         },
         "Sabre_OTA_ProfileBulkReadRS",
       );
 
-      if (!bulkReadRS?.Profiles?.Profile) continue;
+      const profiles = rs?.Profiles?.Profile;
+      if (!profiles) continue;
 
-      const rawProfiles = Array.isArray(bulkReadRS.Profiles.Profile)
-        ? bulkReadRS.Profiles.Profile
-        : [bulkReadRS.Profiles.Profile];
-
-      const batchProfiles = rawProfiles.map((raw: any) =>
-        new SabreProfileParser().parse(raw),
+      const normalized = Array.isArray(profiles) ? profiles : [profiles];
+      allProfiles.push(
+        ...normalized.map((p: any) => new SabreProfileParser().parse(p)),
       );
-
-      allProfiles.push(...batchProfiles);
     }
 
     return allProfiles;
-  }
-
-  public buildSingleProfileRequest(profileId: string): string {
-    return `
-      <Sabre_OTA_ProfileReadRQ
-        Target="Production"
-        TimeStamp="${new Date().toISOString()}"
-        Version="6.90.1"
-        xmlns="http://www.sabre.com/eps/schemas">
-        <Profile>
-          <Identity
-            ClientCode="${this.sabreConfig.clientCode}"
-            DomainID="${this.sabreConfig.pcc}">
-            <UniqueID>${profileId}</UniqueID>
-          </Identity>
-        </Profile>
-      </Sabre_OTA_ProfileReadRQ>
-    `;
-  }
-
-  private buildBulkProfileRequest(profileIds: string[]): string {
-    const profileElements = profileIds
-      .map(
-        (id) => `
-        <Profile ProfileTypeCode="TVL">
-          <Identity ClientCode="${this.sabreConfig.clientCode}" DomainID="${this.sabreConfig.pcc}">
-            <UniqueID>${id}</UniqueID>
-          </Identity>
-        </Profile>
-      `,
-      )
-      .join("");
-
-    return `
-      <Sabre_OTA_ProfileBulkReadRQ
-        Target="Production"
-        TimeStamp="${new Date().toISOString()}"
-        Version="6.90.1"
-        xmlns="http://www.sabre.com/eps/schemas">
-        <Profiles>
-          ${profileElements}
-        </Profiles>
-      </Sabre_OTA_ProfileBulkReadRQ>
-    `;
   }
 
   private async fetchGdsProfileIdsBatch(
@@ -274,24 +232,21 @@ export class CreateProfileService extends ProfilesBaseService {
   ): Promise<Map<string, string>> {
     if (!ids.length) return new Map();
 
-    const queryStr = `
-      SELECT
-        profile_id,
-        gds_profile_id
+    const sql = `
+      SELECT profile_id, gds_profile_id
       FROM gds.gds_profiles
       WHERE (
-          profile_id = ANY($1::uuid[])
-          OR gds_profile_id = ANY($2::text[])
-        )
-        AND gds_provider = 'sabre'
+        profile_id = ANY($1::uuid[])
+        OR gds_profile_id = ANY($2::text[])
+      )
+      AND gds_provider = 'sabre'
       ORDER BY updated_at DESC
     `;
 
-    const result = await query(queryStr, [ids, ids]);
-
+    const rows = await query(sql, [ids, ids]);
     const map = new Map<string, string>();
 
-    for (const row of result) {
+    for (const row of rows) {
       if (row.profile_id) map.set(row.profile_id, row.gds_profile_id);
       if (row.gds_profile_id) map.set(row.gds_profile_id, row.gds_profile_id);
     }

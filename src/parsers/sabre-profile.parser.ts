@@ -1,6 +1,5 @@
 import {
   CanonicalProfile,
-  ProfileType,
   ProfileStatus,
   PersonalInfo,
   ContactInfo,
@@ -31,7 +30,8 @@ import {
   TaxInfo,
   ValidationResult,
   ValidationError,
-  ValidationWarning
+  ValidationWarning,
+  SabreProfileType
 } from '../models/canonical-profile.model';
 
 /**
@@ -94,7 +94,7 @@ export class SabreProfileParser {
   /**
    * Parse a Sabre profile to canonical format
    */
-  public parse(raw: any): ParseResult {
+ public parse(raw: any): ParseResult {
     const errors: ParseError[] = [];
     const warnings: ParseWarning[] = [];
 
@@ -105,7 +105,17 @@ export class SabreProfileParser {
 
       const identity = this.extractIdentity(raw);
       const traveler = raw.Traveler || {};
-      const customer = traveler.Customer || {};
+      
+      // FIX: Handle both Type 1 (direct) and Type 2 (nested Customer) structures
+      const customer = traveler.Customer || traveler;
+      const customerAttrs = this.safeGet(customer, '$', {});
+      const travelerAttrs = this.safeGet(traveler, '$', {});
+      
+      // Merge attributes - prefer customer level, fallback to traveler level
+      const mergedAttrs = {
+        ...travelerAttrs,
+        ...customerAttrs
+      };
       
       const customFields = {
         clientCode: this.safeGet(identity, 'ClientCode'),
@@ -124,7 +134,7 @@ export class SabreProfileParser {
         status: this.mapProfileStatus(this.safeGet(identity, 'ProfileStatusCode')),
         created: this.parseDateSafe(this.safeGet(raw.$, 'CreateDateTime')),
         updated: this.parseDateSafe(this.safeGet(raw.$, 'UpdateDateTime')),
-        personal: this.parsePersonalInfo(customer, this.safeGet(identity, 'ProfileName'), errors),
+        personal: this.parsePersonalInfo(customer, mergedAttrs, this.safeGet(identity, 'ProfileName'), errors),
         contact: this.parseContactInfo(customer, errors),
         employment: this.parseEmploymentInfo(customer, customFields, errors),
         emergencyContacts: this.parseEmergencyContacts(customer, errors),
@@ -236,7 +246,8 @@ export class SabreProfileParser {
   }
 
   private parsePersonalInfo(
-    customer: any, 
+    customer: any,
+    customerAttrs: any,
     fallbackProfileName?: string,
     errors?: ParseError[]
   ): PersonalInfo {
@@ -259,8 +270,6 @@ export class SabreProfileParser {
           title = title || parsed.title;
         }
       }
-
-      const customerAttrs = this.safeGet(customer, '$', {});
       
       return {
         title,
@@ -269,7 +278,7 @@ export class SabreProfileParser {
         lastName,
         suffix,
         dob: this.parseDateSafe(this.safeGet(customerAttrs, 'BirthDate')),
-        gender: this.mapGender(this.safeGet(customerAttrs, 'Gender')),
+        gender: this.mapGender(this.safeGet(customerAttrs, 'Gender') || this.safeGet(customerAttrs, 'GenderCode')),
         nationality: this.safeGet(customerAttrs, 'NationalityCode'),
         countryOfResidence: this.safeGet(customerAttrs, 'CountryOfResidence')
       };
@@ -1118,16 +1127,9 @@ export class SabreProfileParser {
     };
   }
 
-  private mapProfileType(code?: string): ProfileType {
-    if (!code) return ProfileType.PERSONAL;
-    const mapping: Record<string, ProfileType> = {
-      'TVL': ProfileType.PERSONAL,
-      'AGT': ProfileType.AGENCY,
-      'CRP': ProfileType.BUSINESS,
-      'GRP': ProfileType.GROUP
-    };
-    return mapping[code] || ProfileType.PERSONAL;
-  }
+  private mapProfileType(code?: string): SabreProfileType {
+  return code ?? "TVL";
+}
 
   private mapProfileStatus(code?: string): ProfileStatus {
     if (!code) return ProfileStatus.ACTIVE;

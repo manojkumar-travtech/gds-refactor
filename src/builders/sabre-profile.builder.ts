@@ -163,7 +163,7 @@ export class SabreProfileBuilder {
         DomainID: profile.domain || profile.metadata.sourcePCC,
         ProfileName: profile.profileName || this.generateProfileName(profile),
         ProfileStatusCode: this.mapProfileStatus(profile.status),
-        ProfileTypeCode: this.mapProfileType(profile.type),
+        ProfileTypeCode: this.mapProfileType(profile.type as any),
         UniqueID: profile.id || "*",
       },
     };
