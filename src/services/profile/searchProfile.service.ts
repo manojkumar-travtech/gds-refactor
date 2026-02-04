@@ -124,18 +124,19 @@ export class ProfileSearchService extends ProfilesBaseService {
    * Fetch a single page of profiles
    */
   private async fetchProfilePage(params: {
-  profileName: string;
-  email?: string;
-  profileType: string;
-  domain: string;
-  currentPage: number;
-  pageSize: number;
-}): Promise<{ profiles: any[]; hasMore: boolean; numReturned: number }> {
-  const { profileName, email, profileType, domain, currentPage, pageSize } = params;
+    profileName: string;
+    email?: string;
+    profileType: string;
+    domain: string;
+    currentPage: number;
+    pageSize: number;
+  }): Promise<{ profiles: any[]; hasMore: boolean; numReturned: number }> {
+    const { profileName, email, profileType, domain, currentPage, pageSize } =
+      params;
 
-  const emailCondition = email ? `<Email EmailAddress="${email}" />` : "";
+    const emailCondition = email ? `<Email EmailAddress="${email}" />` : "";
 
-  const bodyContent = `
+    const bodyContent = `
     <Sabre_OTA_ProfileSearchRQ Version="6.90.1" xmlns="http://www.sabre.com/eps/schemas">
       <ProfileSearchCriteria ProfileNameOnly="N" PageNumber="${currentPage}" ReturnCount="${pageSize}">
         <TPA_Identity 
@@ -150,40 +151,40 @@ export class ProfileSearchService extends ProfilesBaseService {
     </Sabre_OTA_ProfileSearchRQ>
   `;
 
-  // 🔍 ADD THIS LOGGING
-  logger.info("SOAP Request Details", {
-    profileName,
-    profileType,
-    domain,
-    currentPage,
-    pageSize,
-    bodyPreview: bodyContent.substring(0, 300), // Log first 300 chars
-  });
-
-  const sessionToken = await this.sessionService.getAccessToken();
-
-  try {
-    const response = await this.soapExecutor.execute<SabreProfileSearchRS>(
-      {
-        action: "EPS_EXT_ProfileSearchRQ",
-        service: "Sabre_OTA_ProfileSearchRQ",
-        body: bodyContent,
-        sessionToken,
-      },
-      "Sabre_OTA_ProfileSearchRS",
-    );
-    return this.parseProfileSearchResponse(response);
-  } catch (error: any) {
-    // 🔍 ADD THIS ERROR LOGGING
-    logger.error("Sabre API Error", {
-      message: error.message,
-      responseData: error.response?.data,
-      status: error.response?.status,
-      requestBody: bodyContent, // Log full request on error
+    // 🔍 ADD THIS LOGGING
+    logger.info("SOAP Request Details", {
+      profileName,
+      profileType,
+      domain,
+      currentPage,
+      pageSize,
+      bodyPreview: bodyContent.substring(0, 300), // Log first 300 chars
     });
-    throw error;
+
+    const sessionToken = await this.sessionService.getAccessToken();
+
+    try {
+      const response = await this.soapExecutor.execute<SabreProfileSearchRS>(
+        {
+          action: "EPS_EXT_ProfileSearchRQ",
+          service: "Sabre_OTA_ProfileSearchRQ",
+          body: bodyContent,
+          sessionToken,
+        },
+        "Sabre_OTA_ProfileSearchRS",
+      );
+      return this.parseProfileSearchResponse(response);
+    } catch (error: any) {
+      // 🔍 ADD THIS ERROR LOGGING
+      logger.error("Sabre API Error", {
+        message: error.message,
+        responseData: error.response?.data,
+        status: error.response?.status,
+        requestBody: bodyContent, // Log full request on error
+      });
+      throw error;
+    }
   }
-}
 
   /**
    * Parse profile search response
@@ -308,5 +309,81 @@ export class ProfileSearchService extends ProfilesBaseService {
 
     logger.warn("Profile not found", { profileId });
     return null;
+  }
+
+  /**
+   * Search profiles with streaming callback for page-by-page processing
+   */
+  async searchProfilesStreaming(
+    criteria: ProfileSearchCriteria,
+    onPageReceived: (
+      profiles: any[],
+      pageInfo: { pageNumber: number; hasMore: boolean },
+    ) => Promise<void>,
+  ): Promise<{ totalProcessed: number; totalPages: number }> {
+    const pageSize = criteria.pageSize || 250;
+    const profileType = criteria.profileType || "ALL";
+    const domain = this.sabreConfig.pcc;
+    const profileName = criteria.profileName || "*";
+    const email = criteria.email;
+
+    let currentPage = criteria.pageNumber || 1;
+    let hasMore = false;
+    let totalProcessed = 0;
+    const parser = new SabreProfileParser();
+
+    logger.info("Starting streaming profile search", {
+      profileName,
+      email,
+      profileType,
+      pageSize,
+    });
+
+    do {
+      const pageResult = await this.fetchProfilePage({
+        profileName,
+        email,
+        profileType,
+        domain,
+        currentPage,
+        pageSize,
+      });
+
+      // Parse profiles immediately
+      const parsedProfiles = pageResult.profiles.map((profile) =>
+        parser.parse(profile),
+      );
+
+      hasMore = pageResult.hasMore;
+
+      logger.info(`Processing page ${currentPage}`, {
+        profilesInPage: parsedProfiles.length,
+        totalSoFar: totalProcessed + parsedProfiles.length,
+        hasMore,
+      });
+
+      // 🔥 Process this page immediately (insert to DB)
+      await onPageReceived(parsedProfiles, {
+        pageNumber: currentPage,
+        hasMore,
+      });
+
+      totalProcessed += parsedProfiles.length;
+
+      if (hasMore) {
+        currentPage++;
+        await this.delay(100);
+      }
+    } while (hasMore);
+
+    logger.info("Streaming profile search completed", {
+      totalProcessed,
+      totalPages: currentPage,
+    });
+
+    return {
+      totalProcessed,
+      totalPages: currentPage,
+    };
   }
 }

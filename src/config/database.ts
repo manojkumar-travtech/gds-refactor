@@ -28,8 +28,8 @@ const poolConfig: PoolConfig = {
   password: process.env.DB_PASSWORD,
   max: parseInt(process.env.DB_MAX_CONNECTIONS || "20"),
   min: parseInt(process.env.DB_MIN_CONNECTIONS || "5"),
-  idleTimeoutMillis: 15000,
-  connectionTimeoutMillis: 15000,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 30000,
   ssl: {
     rejectUnauthorized: false,
   },
@@ -173,7 +173,7 @@ export const getClient = async (): Promise<PoolClient> => {
       duration: `${duration}ms`,
       message: "Possible connection leak - ensure client.release() is called",
     });
-  }, 5000);
+  }, 30000);
 
   // Wrap query to maintain logging
   client.query = ((...args: any[]) => {
@@ -185,7 +185,7 @@ export const getClient = async (): Promise<PoolClient> => {
     clearTimeout(timeout);
     const duration = Date.now() - checkoutTime;
 
-    if (duration > 1000) {
+    if (duration > 10000) {
       logger.warn("Long-running client transaction", {
         duration: `${duration}ms`,
         message: "Consider optimizing queries or splitting transactions",

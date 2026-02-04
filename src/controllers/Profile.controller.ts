@@ -5,6 +5,7 @@ import {
   ProfileValidator,
 } from "../services/profile/Profile.types";
 import { ProfileService } from "../services/profile/profile.service";
+import { GdsProfileService } from "../services/apex/gdsProfiles.service";
 
 export class ProfileController {
   private profileService = ProfileService.getInstance();
@@ -119,14 +120,91 @@ export class ProfileController {
     _req: Request,
     res: Response,
   ): Promise<void> {
-    const result = await this.profileService.searchProfiles({
-      pageSize: 250,
-    });
+    try {
+      const BATCH_SIZE = 500;
+      let batch: any[] = [];
+      let totalProcessed = 0;
 
-    res.status(200).json({
-      success: true,
-      totalProfiles: result.profiles.length,
-      profiles: result.profiles,
-    });
+      logger.info("Starting profile sync from Sabre");
+
+      const result = await this.profileService.searchProfilesStreaming(
+        { pageSize: 250, profileName: "B*" },
+        async (profiles, pageInfo) => {
+          // Add profiles to current batch
+          batch.push(...profiles);
+          totalProcessed += profiles.length;
+
+          logger.info(`Received page ${pageInfo.pageNumber}`, {
+            profilesInPage: profiles.length,
+            totalProcessed,
+            hasMore: pageInfo.hasMore,
+          });
+
+          // Insert batch when it reaches BATCH_SIZE or it's the last page
+          if (batch.length >= BATCH_SIZE || !pageInfo.hasMore) {
+            await this.insertProfilesToDatabase(batch);
+
+            logger.info(`✅ Inserted batch to database`, {
+              batchSize: batch.length,
+              totalProcessed,
+            });
+
+            batch = []; // Clear batch after insert
+          }
+        },
+      );
+
+      // Insert any remaining profiles
+      if (batch.length > 0) {
+        await this.insertProfilesToDatabase(batch);
+        logger.info(`✅ Inserted final batch`, { batchSize: batch.length });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Profiles synced successfully",
+        totalProcessed: result.totalProcessed,
+        totalPages: result.totalPages,
+      });
+    } catch (error: any) {
+      logger.error("Error syncing profiles from Sabre", {
+        error: error.message,
+        stack: error.stack,
+      });
+
+      res.status(500).json({
+        success: false,
+        error: "Failed to sync profiles from Sabre",
+        message: error.message,
+      });
+    }
+  }
+
+  /**
+   * Insert profiles to database with error handling
+   */
+  private async insertProfilesToDatabase(profiles: any[]): Promise<void> {
+    try {
+      if (!profiles.length) {
+        logger.info("No profiles to insert");
+        return;
+      }
+
+      const gdsProfileService = GdsProfileService.getInstance();
+
+      const result = await gdsProfileService.processProfileBatchBulk(profiles);
+
+      logger.info("Profiles synced successfully", {
+        total: profiles.length,
+        created: result.created,
+        updated: result.updated,
+      });
+    } catch (error: any) {
+      logger.error("Database insert failed", {
+        profileCount: profiles.length,
+        error: error.message,
+      });
+      throw error;
+    }
   }
 }
