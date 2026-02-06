@@ -6,8 +6,8 @@ export interface ProfileRelatedData {
   profileId: string;
   organizationId: string;
   gdsProfileId: string;
-  rawData: any;
-  source?: string; // e.g., "SABRE", "AMADEUS"
+  source?: string; 
+  [key: string]: any;
 }
 
 export interface InsertionResult {

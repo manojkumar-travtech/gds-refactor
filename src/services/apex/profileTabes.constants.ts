@@ -1,0 +1,9 @@
+export const TABLE_PROFILES = "profiles.profiles";
+export const TABLE_SABRE_PROFILES = "gds.gds_profiles";
+export const TABLE_LOYALTY_PROGRAMS = "profiles.loyalty_programs";
+export const TABLE_EMERGENCY_CONTACTS = "profiles.emergency_contacts";
+export const TABLE_TRAVEL_DOCUMENTS = "profiles.travel_documents";
+export const TABLE_PAYMENT_METHODS = "profiles.payment_methods";
+export const TABLE_ADDRESSES = "profiles.addresses";
+export const TABLE_EMAILS = "profiles.emails";
+export const TABLE_PHONES = "profiles.phones";

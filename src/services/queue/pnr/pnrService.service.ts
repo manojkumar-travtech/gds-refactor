@@ -1,11 +1,13 @@
 import { getClient, PoolClient } from "../../../config/database";
+import { getDefaultOrganizationId } from "../../../connectors/helpers/otherHelpers";
 import logger from "../../../utils/logger";
 import {
   CompletePNRData,
   ComprehensivePNRParser,
 } from "./comprehensive-pnr-parser";
+import { PassengerUser, PnrHelpersService } from "./pnrHelpers.service";
 
-export class PnrService {
+export class PnrService extends PnrHelpersService {
   private static instance: PnrService;
 
   static getInstance() {
@@ -32,17 +34,34 @@ export class PnrService {
     try {
       await client.query("BEGIN");
 
-      const pnrId = await this.upsertPnr(client, data.booking, queue_number);
-      const tripId = await this.upsertTrip(client, pnrId, data.trip);
+      // Get or create ALL users for ALL passengers
+      const passengerUsers = await this.getOrCreateUsersForAllPassengers(
+        client,
+        data,
+      );
 
-      await this.processPassengers(client, pnrId, data.passengers);
+      // Store PNR record
+      const pnrId = await this.upsertPnr(client, data, queue_number);
+      console.log(`PNR record stored with ID: ${pnrId} for PNR: ${data.booking.pnr}`);
+      // Store trip with primary passenger as creator
+      const tripId = await this.upsertTrip(client, data, passengerUsers);
+
+      // Link ALL passengers/travelers to the trip
+      await this.linkPassengersToTrip(client, tripId, passengerUsers);
+
+      // Process all segments
       await this.processFlights(client, tripId, data.flights);
       await this.processHotels(client, tripId, data.hotels);
       await this.processCars(client, tripId, data.cars);
 
       await client.query("COMMIT");
 
-      logger.info(`[PNR STORED] ${data.booking.pnr}`);
+      logger.info(`[PNR STORED] ${data.booking.pnr} -> Trip ${tripId}`, {
+        travelers: passengerUsers.length,
+        flights: data.flights.length,
+        hotels: data.hotels.length,
+        cars: data.cars.length,
+      });
     } catch (err) {
       await client.query("ROLLBACK");
       logger.error("PNR Store Failed", err);
@@ -58,28 +77,28 @@ export class PnrService {
 
   private async upsertPnr(
     client: PoolClient,
-    booking: any,
+    data: CompletePNRData,
     queueNumber: string,
-    profileId?: string,
   ): Promise<number> {
-    if (!booking?.pnr) {
-      throw new Error("Missing PNR in booking payload");
+    if (!data.booking?.pnr) {
+      throw new Error("Missing PNR number in data");
     }
 
-    const pnrNumber = booking.pnr.trim().toUpperCase();
+    const pnrNumber = data.booking.pnr.trim().toUpperCase();
+    const profileId = data.passengers?.[0]?.profileId || null;
 
     const res = await client.query(
       `INSERT INTO bookings.pnrs
-      (pnr_number, queue_number, raw_data, created_at, updated_at, profile_id)
-     VALUES ($1, $2, $3, NOW(), NOW(), $4)
+      (pnr_number, queue_number, raw_data, profile_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, NOW(), NOW())
      ON CONFLICT (pnr_number)
      DO UPDATE SET
         queue_number = EXCLUDED.queue_number,
         raw_data     = EXCLUDED.raw_data,
-        updated_at   = NOW(),
-        profile_id  = EXCLUDED.profile_id
+        profile_id   = EXCLUDED.profile_id,
+        updated_at   = NOW()
      RETURNING id`,
-      [pnrNumber, queueNumber, booking, profileId || null],
+      [pnrNumber, queueNumber, data.rawData, profileId],
     );
 
     return res.rows[0].id;
@@ -87,132 +106,467 @@ export class PnrService {
 
   private async upsertTrip(
     client: PoolClient,
-    pnrId: number,
-    trip: any,
-  ): Promise<number> {
+    data: CompletePNRData,
+    passengerUsers: PassengerUser[],
+  ): Promise<string> {
+    const trip = data.trip;
+    const booking = data.booking;
+
+    if (!trip) {
+      throw new Error("Missing trip data");
+    }
+
+    if (passengerUsers.length === 0) {
+      throw new Error("No passengers/users found for trip");
+    }
+
+    // Use primary passenger as creator, or first passenger if no primary
+    const primaryUser =
+      passengerUsers.find((u) => u.isPrimary) || passengerUsers[0];
+    const createdBy = primaryUser.userId;
+
+    // Get organization ID
+    const organizationId = await this.getOrganizationId(client, createdBy);
+
+    // Map status
+    const status = this.mapBookingStatus(trip.status || booking?.status);
+
     const res = await client.query(
       `INSERT INTO bookings.trips
-       (pnr_id, start_date, end_date, origin, destination)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (pnr_id)
-       DO UPDATE SET start_date = EXCLUDED.start_date,
-                     end_date   = EXCLUDED.end_date,
-                     origin     = EXCLUDED.origin,
-                     destination= EXCLUDED.destination
+       (
+         organization_id,
+         created_by,
+         trip_name,
+         trip_number,
+         origin_city,
+         destination_city,
+         departure_date,
+         return_date,
+         purpose,
+         is_international,
+         status,
+         estimated_cost,
+         actual_cost,
+         currency,
+         requires_approval,
+         approved_by,
+         approved_at,
+         notes,
+         metadata,
+         user_id,
+         pnr,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW(), NOW())
+       ON CONFLICT (pnr)
+       DO UPDATE SET
+         trip_name = EXCLUDED.trip_name,
+         origin_city = EXCLUDED.origin_city,
+         destination_city = EXCLUDED.destination_city,
+         departure_date = EXCLUDED.departure_date,
+         return_date = EXCLUDED.return_date,
+         purpose = EXCLUDED.purpose,
+         is_international = EXCLUDED.is_international,
+         status = EXCLUDED.status,
+         estimated_cost = EXCLUDED.estimated_cost,
+         actual_cost = EXCLUDED.actual_cost,
+         requires_approval = EXCLUDED.requires_approval,
+         approved_by = EXCLUDED.approved_by,
+         approved_at = EXCLUDED.approved_at,
+         metadata = EXCLUDED.metadata,
+         user_id = EXCLUDED.user_id,
+         updated_at = NOW()
        RETURNING id`,
-      [pnrId, trip.startDate, trip.endDate, trip.origin, trip.destination],
+      [
+        organizationId, // $1
+        createdBy, // $2 - created_by (primary passenger)
+        trip.tripName || "Untitled Trip", // $3
+        trip.tripNumber, // $4
+        trip.origin, // $5
+        trip.destination, // $6
+        trip.departureDate || null, // $7
+        trip.returnDate || null, // $8
+        trip.purpose?.description || null, // $9
+        trip.isInternational || false, // $10
+        status, // $11
+        trip.estimatedCost || null, // $12
+        trip.actualCost || null, // $13
+        trip.currency || "USD", // $14
+        trip.approval?.required || false, // $15
+        null, // approved_by                         // $16
+        trip.approval?.approvedAt || null, // $17
+        this.buildTripNotes(data, passengerUsers), // $18
+        this.buildTripMetadata(data, passengerUsers), // $19
+        createdBy, // $20 - user_id (primary passenger)
+        data.booking.pnr, // $21
+      ],
     );
 
     return res.rows[0].id;
   }
 
   /* -------------------------------------------------------------------------- */
-  /*                          SEGMENT PROCESSORS                                */
+  /*                          PASSENGER/USER MANAGEMENT                         */
   /* -------------------------------------------------------------------------- */
 
-  private async processPassengers(
+  /**
+   * Get or create users for ALL passengers in the PNR
+   */
+  private async getOrCreateUsersForAllPassengers(
     client: PoolClient,
-    pnrId: number,
-    pax: any[],
-  ) {
-    for (const p of pax) {
-      await client.query(
-        `INSERT INTO bookings.passengers
-         (pnr_id, first_name, last_name, type, email, phone)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT DO NOTHING`,
-        [pnrId, p.firstName, p.lastName, p.type, p.email, p.phone],
+    data: CompletePNRData,
+  ): Promise<PassengerUser[]> {
+    if (!data.passengers || data.passengers.length === 0) {
+      throw new Error("No passengers found in PNR");
+    }
+
+    const passengerUsers: PassengerUser[] = [];
+
+    for (const passenger of data.passengers) {
+      const email = passenger.emails?.[0];
+
+      if (!email) {
+        logger.warn(
+          `Passenger ${passenger.firstName} ${passenger.lastName} has no email, skipping`,
+        );
+        continue;
+      }
+
+      // Get or create user for this passenger
+      const userId = await this.getOrCreateUserByEmail(
+        client,
+        email,
+        passenger.firstName,
+        passenger.lastName,
       );
+
+      passengerUsers.push({
+        passengerId: passenger.id,
+        userId,
+        email,
+        firstName: passenger.firstName,
+        lastName: passenger.lastName,
+        isPrimary: passenger.isPrimary,
+        profileId: passenger.profileId,
+      });
+
+      logger.info(
+        `Processed passenger: ${passenger.firstName} ${passenger.lastName} -> User ID: ${userId}`,
+      );
+    }
+
+    if (passengerUsers.length === 0) {
+      throw new Error(
+        "Could not process any passengers - all missing email addresses",
+      );
+    }
+
+    return passengerUsers;
+  }
+
+  /**
+   * Get or create user based on email
+   */
+  private async getOrCreateUserByEmail(
+    client: PoolClient,
+    email: string,
+    firstName: string,
+    lastName: string,
+  ): Promise<string> {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check if user exists with this email
+    const existingUser = await client.query(
+      `SELECT id FROM core.users WHERE email = $1 LIMIT 1`,
+      [normalizedEmail],
+    );
+
+    if (existingUser.rows.length > 0) {
+      logger.info(`Found existing user for email: ${normalizedEmail}`);
+      return existingUser.rows[0].id;
+    }
+
+    // User doesn't exist, create new user
+    logger.info(`Creating new user for email: ${normalizedEmail}`);
+
+    // Get default organization for new user
+    const defaultOrgId = await getDefaultOrganizationId();
+
+    const newUser = await client.query(
+      `INSERT INTO core.users 
+       (email, first_name, last_name, organization_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       RETURNING id`,
+      [normalizedEmail, firstName, lastName, defaultOrgId],
+    );
+
+    const userId = newUser.rows[0].id;
+
+    logger.info(
+      `Created new user with ID: ${userId} for email: ${normalizedEmail}`,
+    );
+
+    return userId;
+  }
+
+  /**
+   * Link all passengers to the trip via trip_travelers table
+   */
+  private async linkPassengersToTrip(
+    client: PoolClient,
+    tripId: string,
+    passengerUsers: PassengerUser[],
+  ): Promise<void> {
+    logger.info(
+      `Linking ${passengerUsers.length} passengers to trip ${tripId}`,
+    );
+
+    for (const passengerUser of passengerUsers) {
+      // If passenger has a profile, link via trip_travelers
+      if (passengerUser.profileId) {
+        await client.query(
+          `INSERT INTO bookings.trip_travelers
+           (trip_id, profile_id, is_primary)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (trip_id, profile_id) DO UPDATE
+           SET is_primary = EXCLUDED.is_primary`,
+          [tripId, passengerUser.profileId, passengerUser.isPrimary],
+        );
+
+        logger.debug(
+          `Linked profile ${passengerUser.profileId} to trip ${tripId} (primary: ${passengerUser.isPrimary})`,
+        );
+      } else {
+        logger.warn(
+          `Passenger ${passengerUser.firstName} ${passengerUser.lastName} has no profile ID, cannot link to trip_travelers`,
+        );
+      }
     }
   }
 
+  /**
+   * Get organization ID from user
+   */
+  private async getOrganizationId(
+    client: PoolClient,
+    userId: string,
+  ): Promise<string> {
+    // Try to get organization from user
+    const result = await client.query(
+      `SELECT organization_id FROM core.users WHERE id = $1`,
+      [userId],
+    );
+
+    if (result.rows.length > 0 && result.rows[0].organization_id) {
+      return result.rows[0].organization_id;
+    }
+
+    // Fallback to default organization
+    return await getDefaultOrganizationId();
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /*                          SEGMENT PROCESSORS                                */
+  /* -------------------------------------------------------------------------- */
+
   private async processFlights(
     client: PoolClient,
-    tripId: number,
+    tripId: string,
     flights: any[],
-  ) {
-    for (const f of flights) {
-      const res = await client.query(
-        `INSERT INTO bookings.flights
-         (carrier, flight_number, origin, destination, departure_time, arrival_time)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (carrier, flight_number, departure_time)
-         DO UPDATE SET arrival_time = EXCLUDED.arrival_time
-         RETURNING id`,
-        [
-          f.carrier,
-          f.flightNumber,
-          f.origin,
-          f.destination,
-          f.departure,
-          f.arrival,
-        ],
-      );
+  ): Promise<void> {
+    if (!flights || flights.length === 0) return;
 
-      const flightId = res.rows[0].id;
+    for (const flight of flights) {
+      const confirmationNumber = `${flight.id}-${flight.segmentAssociationId}`;
 
       await client.query(
-        `INSERT INTO bookings.trip_flights (trip_id, flight_id)
-         VALUES ($1,$2)
-         ON CONFLICT DO NOTHING`,
-        [tripId, flightId],
+        `INSERT INTO bookings.flights
+         (
+           trip_id,
+           confirmation_number,
+           airline,
+           flight_number,
+           departure_airport,
+           arrival_airport,
+           departure_time,
+           arrival_time,
+           cabin_class,
+           seat_number,
+           booking_reference,
+           ticket_number,
+           cost,
+           currency,
+           status,
+           notes,
+           metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         ON CONFLICT (confirmation_number)
+         DO UPDATE SET
+           departure_time = EXCLUDED.departure_time,
+           arrival_time = EXCLUDED.arrival_time,
+           seat_number = EXCLUDED.seat_number,
+           status = EXCLUDED.status,
+           metadata = EXCLUDED.metadata`,
+        [
+          tripId,
+          confirmationNumber,
+          flight.marketingAirlineName || flight.marketingAirline,
+          flight.flightNumber,
+          flight.departureAirport,
+          flight.arrivalAirport,
+          flight.departureDateTime,
+          flight.arrivalDateTime,
+          flight.bookingClass,
+          flight.seats?.[0]?.seatNumber || null,
+          flight.segmentAssociationId,
+          null,
+          null,
+          "USD",
+          this.mapFlightStatus(flight.status),
+          flight.banner || null,
+          {
+            equipmentType: flight.equipmentType,
+            equipmentName: flight.equipmentName,
+            operatingAirline: flight.operatingAirlineName,
+            duration: flight.duration,
+            codeShare: flight.codeShare,
+            scheduleChange: flight.scheduleChange,
+            warnings: flight.warnings,
+            allSeats: flight.seats,
+          },
+        ],
       );
     }
   }
 
   private async processHotels(
     client: PoolClient,
-    tripId: number,
+    tripId: string,
     hotels: any[],
-  ) {
-    for (const h of hotels) {
-      const res = await client.query(
-        `INSERT INTO bookings.hotels
-         (name, city, check_in, check_out, confirmation_number)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (confirmation_number)
-         DO UPDATE SET check_in = EXCLUDED.check_in, check_out = EXCLUDED.check_out
-         RETURNING id`,
-        [h.name, h.city, h.checkIn, h.checkOut, h.confirmation],
-      );
+  ): Promise<void> {
+    if (!hotels || hotels.length === 0) return;
 
-      const hotelId = res.rows[0].id;
+    for (const hotel of hotels) {
+      const confirmationNumber =
+        hotel.confirmationNumber || `HOTEL-${hotel.id}`;
 
       await client.query(
-        `INSERT INTO bookings.trip_hotels (trip_id, hotel_id)
-         VALUES ($1,$2)
-         ON CONFLICT DO NOTHING`,
-        [tripId, hotelId],
+        `INSERT INTO bookings.hotels
+         (
+           trip_id,
+           confirmation_number,
+           hotel_name,
+           hotel_chain,
+           address,
+           city,
+           country,
+           check_in_date,
+           check_out_date,
+           room_type,
+           number_of_rooms,
+           booking_reference,
+           cost,
+           currency,
+           status,
+           special_requests,
+           metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         ON CONFLICT (confirmation_number)
+         DO UPDATE SET
+           check_in_date = EXCLUDED.check_in_date,
+           check_out_date = EXCLUDED.check_out_date,
+           status = EXCLUDED.status,
+           metadata = EXCLUDED.metadata`,
+        [
+          tripId,
+          confirmationNumber,
+          hotel.name,
+          hotel.chainName || hotel.chainCode,
+          hotel.address || hotel.addressLines?.join(", "),
+          hotel.cityName || hotel.cityCode,
+          hotel.countryName || hotel.countryCode,
+          hotel.checkInDate,
+          hotel.checkOutDate,
+          hotel.roomType || hotel.roomDescription,
+          hotel.numberOfRooms || 1,
+          hotel.id,
+          hotel.rate ? parseFloat(hotel.rate) : null,
+          hotel.currency || "USD",
+          this.mapHotelStatus(hotel.status),
+          null,
+          {
+            chainCode: hotel.chainCode,
+            numberOfNights: hotel.numberOfNights,
+            guarantee: hotel.guarantee,
+            phone: hotel.phone,
+            rawData: hotel.rawData,
+          },
+        ],
       );
     }
   }
 
-  private async processCars(client: PoolClient, tripId: number, cars: any[]) {
-    for (const c of cars) {
-      const res = await client.query(
-        `INSERT INTO bookings.car_rentals
-         (vendor, pickup_location, dropoff_location, pickup_date, dropoff_date, confirmation_number)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (confirmation_number)
-         DO UPDATE SET pickup_date = EXCLUDED.pickup_date, dropoff_date = EXCLUDED.dropoff_date
-         RETURNING id`,
-        [
-          c.vendor,
-          c.pickupLocation,
-          c.dropoffLocation,
-          c.pickupDate,
-          c.dropoffDate,
-          c.confirmation,
-        ],
-      );
+  private async processCars(
+    client: PoolClient,
+    tripId: string,
+    cars: any[],
+  ): Promise<void> {
+    if (!cars || cars.length === 0) return;
 
-      const carId = res.rows[0].id;
+    for (const car of cars) {
+      const confirmationNumber = car.confirmationNumber || `CAR-${car.id}`;
 
       await client.query(
-        `INSERT INTO bookings.trip_cars (trip_id, car_id)
-         VALUES ($1,$2)
-         ON CONFLICT DO NOTHING`,
-        [tripId, carId],
+        `INSERT INTO bookings.car_rentals
+         (
+           trip_id,
+           confirmation_number,
+           rental_company,
+           vehicle_type,
+           vehicle_class,
+           pickup_location,
+           dropoff_location,
+           pickup_date,
+           dropoff_date,
+           booking_reference,
+           cost,
+           currency,
+           status,
+           insurance_included,
+           metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (confirmation_number)
+         DO UPDATE SET
+           pickup_date = EXCLUDED.pickup_date,
+           dropoff_date = EXCLUDED.dropoff_date,
+           status = EXCLUDED.status,
+           metadata = EXCLUDED.metadata`,
+        [
+          tripId,
+          confirmationNumber,
+          car.vendorName || car.vendor,
+          car.vehicleType,
+          car.vehicleClass,
+          car.pickupLocationName || car.pickupLocation,
+          car.returnLocationName || car.returnLocation,
+          car.pickupDate,
+          car.returnDate,
+          car.id,
+          car.rate ? parseFloat(car.rate) : null,
+          car.currency || "USD",
+          this.mapCarStatus(car.status),
+          false,
+          {
+            rentalDays: car.rentalDays,
+            vehicleDescription: car.vehicleDescription,
+            transmission: car.transmission,
+            fuelType: car.fuelType,
+          },
+        ],
       );
     }
   }

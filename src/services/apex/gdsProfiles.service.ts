@@ -7,9 +7,6 @@ const TABLE_USERS = "core.users";
 const TABLE_PROFILES = "profiles.profiles";
 const TABLE_GDS_PROFILES = "gds.gds_profiles";
 
-/* ---------------------------------------------------
- * Configuration
- * --------------------------------------------------- */
 const BATCH_SIZE = 10; // Reduced for faster transactions
 const CONCURRENCY_LIMIT = 5; // Parallel transactions (adjust based on DB pool size)
 
@@ -33,7 +30,7 @@ interface NormalizedSabreProfile {
   firstName: string | null;
   lastName: string | null;
   phone: string | null;
-  raw: any;
+  [key: string]: any; // full Sabre profile and other fields
 }
 
 interface BatchResult {
@@ -44,8 +41,8 @@ interface BatchResult {
     profileId: string;
     organizationId: string;
     gdsProfileId: string;
-    rawData: any;
     source?: string;
+    [key: string]: any;
   }>;
 }
 
@@ -208,106 +205,109 @@ export class GdsProfileService {
   ): Promise<BatchResult> {
     const batchStartTime = Date.now();
 
-    try {
-      const result = await transaction(async (client) => {
-        let created = 0;
-        let failed = 0;
-        const profilesCreated: Array<{
-          profileId: string;
-          organizationId: string;
-          gdsProfileId: string;
-          rawData: any;
-          source?: string;
-        }> = [];
+    let created = 0;
+    let failed = 0;
 
-        for (const p of profiles) {
-          try {
-            const organizationId = await getDefaultOrganizationId();
+    // ✅ Type allows spreading all keys from NormalizedSabreProfile
+    const profilesCreated: Array<
+      NormalizedSabreProfile & {
+        profileId: string;
+        organizationId: string;
+        source: string;
+      }
+    > = [];
 
-            const userId = await this.getOrCreateUser(
-              client,
-              p,
+    // ✅ Fetch once (important optimization)
+    const organizationId = await getDefaultOrganizationId();
+
+    for (const p of profiles) {
+      try {
+        await transaction(async (client) => {
+          const userId = await this.getOrCreateUser(client, p, organizationId);
+
+          const profileId = await this.getOrCreateProfile(
+            client,
+            p,
+            userId,
+            organizationId,
+          );
+
+          const inserted = await this.insertGdsProfile(client, p, profileId);
+
+          if (inserted) {
+            created++;
+
+            profilesCreated.push({
+              profileId,
               organizationId,
-            );
-            const profileId = await this.getOrCreateProfile(
-              client,
-              p,
-              userId,
-              organizationId,
-            );
-            const inserted = await this.insertGdsProfile(client, p, profileId);
-
-            if (inserted) {
-              created++;
-              // Track successfully created profiles for job queue
-              profilesCreated.push({
-                profileId,
-                organizationId,
-                gdsProfileId: p.gdsProfileId,
-                rawData: p.raw,
-                source: "SABRE", // Can be made configurable if needed
-              });
-            }
-          } catch (error) {
-            failed++;
-            logger.error(`Failed to process profile in batch ${batchIndex}`, {
-              email: p.email,
-              gdsProfileId: p.gdsProfileId,
-              error: error instanceof Error ? error.message : error,
+              source: "SABRE",
+              ...p, // ✅ spread all profile keys
             });
-            // Continue processing other profiles in the batch
           }
-        }
+        });
+      } catch (error) {
+        failed++;
 
-        return { created, failed, profilesCreated };
-      });
-
-      const duration = Date.now() - batchStartTime;
-      logger.info(`Batch ${batchIndex} completed`, {
-        profileCount: profiles.length,
-        created: result.created,
-        failed: result.failed,
-        duration: `${duration}ms`,
-      });
-
-      return {
-        created: result.created,
-        failed: result.failed,
-        batchIndex,
-        profilesCreated: result.profilesCreated,
-      };
-    } catch (error) {
-      const duration = Date.now() - batchStartTime;
-      logger.error(`Transaction failed for batch ${batchIndex}`, {
-        error: error instanceof Error ? error.message : error,
-        duration: `${duration}ms`,
-        profileCount: profiles.length,
-      });
-      throw error; // Will be caught by Promise.allSettled
+        logger.error(`Failed to process profile in batch ${batchIndex}`, {
+          email: p.email,
+          gdsProfileId: p.gdsProfileId,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
     }
+
+    const duration = Date.now() - batchStartTime;
+
+    logger.info(`Batch ${batchIndex} completed`, {
+      profileCount: profiles.length,
+      created,
+      failed,
+      duration: `${duration}ms`,
+    });
+
+    return {
+      created,
+      failed,
+      batchIndex,
+      profilesCreated,
+    };
   }
 
-  /* ---------------------------------------------------
-   * Normalizer
-   * --------------------------------------------------- */
-  private normalizeSabreProfile(input: any): NormalizedSabreProfile | null {
-    const p = input?.profile;
-    if (!p?.id) return null;
+  private normalizeSabreProfile(input: any): any | null {
+    const profile = input?.profile;
+    if (!profile?.id) return null;
 
-    const email = p.contact?.emails?.[0]?.address?.toLowerCase().trim() || null;
+    // pick primary email, else first available
+    const emails = profile.contact?.emails as
+      | { address?: string; primary?: boolean }[]
+      | undefined;
+
+    const primaryEmail = emails?.find((e) => e.primary) ?? emails?.[0] ?? null;
+
+    const email = primaryEmail?.address?.toLowerCase().trim() || null;
 
     if (!email || !this.isValidEmail(email)) return null;
 
-    return {
-      gdsProfileId: p.id,
-      profileName: p.profileName || null,
-      profileType: p.type || null,
-      pcc: p.metadata?.sourcePCC || p.domain || null,
+    // pick primary phone, else first available
+    const phones = profile.contact?.phones as
+      | { number?: string; primary?: boolean }[]
+      | undefined;
+
+    const primaryPhone = phones?.find((p) => p.primary) ?? phones?.[0] ?? null;
+
+    const baseFields = {
+      gdsProfileId: profile.id,
+      pcc: profile.metadata?.sourcePCC ?? profile.domain ?? null,
       email,
-      firstName: p.personal?.firstName || null,
-      lastName: p.personal?.lastName || null,
-      phone: p.contact?.phones?.[0]?.number || null,
-      raw: input,
+      firstName: profile.personal?.firstName ?? null,
+      lastName: profile.personal?.lastName ?? null,
+      phone: primaryPhone?.number ?? null,
+      dateOfBirth: profile.personal?.dob ?? null,
+    };
+
+    return {
+      ...profile, // full Sabre profile untouched
+      ...baseFields, // flattened base fields
     };
   }
 
@@ -367,15 +367,21 @@ export class GdsProfileService {
     userId: string,
     organizationId: string,
   ): Promise<string> {
+    const dob =
+      p?.dateOfBirth && !isNaN(Date.parse(p.dateOfBirth))
+        ? new Date(p.dateOfBirth)
+        : null;
+
+    // 1️⃣ Check if profile already exists
     const existing = await client.query(
       `
-      SELECT id
-      FROM ${TABLE_PROFILES}
-      WHERE user_id = $1
-        AND organization_id = $2
-        AND deleted_at IS NULL
-      LIMIT 1
-      `,
+    SELECT id
+    FROM ${TABLE_PROFILES}
+    WHERE user_id = $1
+      AND organization_id = $2
+      AND deleted_at IS NULL
+    LIMIT 1
+    `,
       [userId, organizationId],
     );
 
@@ -383,35 +389,38 @@ export class GdsProfileService {
       return existing.rows[0].id;
     }
 
+    // 2️⃣ Insert new profile
     const inserted = await client.query(
       `
-      INSERT INTO ${TABLE_PROFILES} (
-        user_id,
-        organization_id,
-        first_name,
-        last_name,
-        email,
-        phone,
-        profile_type,
-        metadata,
-        contact_info,
-        provenance,
-        completeness_score,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1, $2, $3, $4, $5, $6,
-        'personal',
-        $7::jsonb,
-        $8::jsonb,
-        $9::jsonb,
-        $10,
-        NOW(),
-        NOW()
-      )
-      RETURNING id
-      `,
+    INSERT INTO ${TABLE_PROFILES} (
+      user_id,
+      organization_id,
+      first_name,
+      last_name,
+      email,
+      phone,
+      date_of_birth,
+      profile_type,
+      metadata,
+      contact_info,
+      provenance,
+      completeness_score,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      $1, $2, $3, $4, $5, $6,
+      $7,
+      'personal',
+      $8::jsonb,
+      $9::jsonb,
+      $10::jsonb,
+      $11,
+      NOW(),
+      NOW()
+    )
+    RETURNING id
+    `,
       [
         userId,
         organizationId,
@@ -419,8 +428,9 @@ export class GdsProfileService {
         p.lastName,
         p.email,
         p.phone,
+        dob,
         p.raw,
-        p.raw?.profile?.contact || {},
+        p.contact || {},
         {
           source: "SABRE",
           sourceProfileId: p.gdsProfileId,
@@ -477,7 +487,7 @@ export class GdsProfileService {
         profileId,
         p.gdsProfileId,
         p.pcc,
-        p.profileType,
+        p.type,
         p.profileName,
         p.raw,
         { synced_at: new Date().toISOString() },

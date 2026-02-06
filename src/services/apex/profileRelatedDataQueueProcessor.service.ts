@@ -1,24 +1,24 @@
 import logger from "../../utils/logger";
 import { ProfileRelatedDataQueue } from "./profileRelatedDataQueue.service";
-import { ProfileRelatedData, InsertionResult } from "./types";
+import { ProfileRelatedData } from "./types";
 
 /**
- * Background Processor for Profile Related Data Queue
- * Handles periodic processing of queued items
+ * Optimized Background Processor for Profile Related Data Queue
+ * - No return values needed
+ * - Simplified error handling
+ * - Faster processing
  */
 export class ProfileRelatedDataQueueProcessor {
   private isProcessing: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly PROCESS_INTERVAL: number;
   private readonly queue: ProfileRelatedDataQueue;
-  private readonly processFunction: (
-    data: ProfileRelatedData,
-  ) => Promise<InsertionResult>;
+  private readonly processFunction: (data: ProfileRelatedData) => Promise<void>;
 
   constructor(
     queue: ProfileRelatedDataQueue,
-    processFunction: (data: ProfileRelatedData) => Promise<InsertionResult>,
-    processInterval: number = 5000,
+    processFunction: (data: ProfileRelatedData) => Promise<void>,
+    processInterval: number = 1000,
   ) {
     this.queue = queue;
     this.processFunction = processFunction;
@@ -85,32 +85,46 @@ export class ProfileRelatedDataQueueProcessor {
     try {
       const batch = this.queue.dequeueBatch();
 
-      logger.info(`Processing related data batch`, {
-        batchSize: batch.length,
-        remainingInQueue: this.queue.getSize(),
+      logger.debug(`Processing batch`, {
+        size: batch.length,
+        remaining: this.queue.getSize(),
       });
 
+      // Process all profiles in parallel
       const results = await Promise.allSettled(
         batch.map((data) => this.processFunction(data)),
       );
 
-      // Analyze results
+      // Count successes and failures
       const successful = results.filter((r) => r.status === "fulfilled").length;
       const failed = results.filter((r) => r.status === "rejected").length;
       const duration = Date.now() - startTime;
 
-      logger.info(`Related data batch completed`, {
-        successful,
-        failed,
-        duration: `${duration}ms`,
-        remaining: this.queue.getSize(),
-      });
-
-      // Log failures with details
-      this.logFailures(results, batch);
+      if (failed > 0) {
+        logger.warn(`Batch completed with failures`, {
+          successful,
+          failed,
+          duration: `${duration}ms`,
+        });
+        
+        // Log only failed profiles
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            logger.error(`Profile processing failed`, {
+              profileId: batch[index].profileId,
+              error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            });
+          }
+        });
+      } else {
+        logger.debug(`Batch completed`, {
+          successful,
+          duration: `${duration}ms`,
+        });
+      }
     } catch (error) {
-      logger.error("Error processing related data queue", {
-        error: error instanceof Error ? error.message : error,
+      logger.error("Batch processing error", {
+        error: error instanceof Error ? error.message : String(error),
       });
     } finally {
       this.isProcessing = false;
@@ -121,35 +135,19 @@ export class ProfileRelatedDataQueueProcessor {
    * Process all remaining items in the queue
    */
   public async processAll(): Promise<void> {
-    logger.info("Processing all remaining items in queue", {
-      queueSize: this.queue.getSize(),
-    });
+    const queueSize = this.queue.getSize();
+    
+    if (queueSize === 0) {
+      return;
+    }
+
+    logger.info("Processing all remaining items", { queueSize });
 
     while (!this.queue.isEmpty() && !this.isProcessing) {
       await this.processBatch();
     }
 
-    logger.info("All queue items processed");
-  }
-
-  /**
-   * Log failed processing attempts
-   */
-  private logFailures(
-    results: PromiseSettledResult<InsertionResult>[],
-    batch: ProfileRelatedData[],
-  ): void {
-    results.forEach((result, index) => {
-      if (result.status === "rejected") {
-        logger.error(`Failed to process related data for profile`, {
-          profileId: batch[index].profileId,
-          error:
-            result.reason instanceof Error
-              ? result.reason.message
-              : result.reason,
-        });
-      }
-    });
+    logger.info("Queue fully processed");
   }
 
   /**

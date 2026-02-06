@@ -4,7 +4,7 @@ import { QueueProcessor } from "../processer/queueProcesser";
 import { SabreQueueService } from "../queueCount.service";
 import { PnrDetailsService } from "../pnr/pnrDetails.service";
 import { sabreSessionPool } from "../../../sessionManagement/sabreSessionPool";
-import { PlaceQueueService } from "../placeToQueue.service";
+// import { PlaceQueueService } from "../placeToQueue.service";
 import { ConfigManager } from "../../../config/config.manager";
 
 const pnrBuffer: string[] = [];
@@ -82,7 +82,7 @@ export async function runSabreQueueWorker() {
     // Final flush (in case there are any remaining)
     await flushBuffer();
 
-    console.log("[QUEUE WORKER] All queues processed successfully");
+    console.log("[QUEUE WORKER] Queue processed successfully");
   } catch (error) {
     console.error("[QUEUE WORKER] Fatal error:", error);
     // Attempt to flush buffer even on error
@@ -157,56 +157,56 @@ async function flushBuffer(): Promise<void> {
       }
     });
 
-    // Step 3: Move successful PNRs to target queue
-    if (successfulPNRs.length > 0) {
-      const queueService = new PlaceQueueService();
-      const queueResults = await queueService.batchMoveToQueue(
-        sourceQueue, // Pass the source queue as first parameter
-        successfulPNRs,
-        undefined, // No target queue override - use default
-        5, // Concurrency
-      );
+    // // Step 3: Move successful PNRs to target queue
+    // if (successfulPNRs.length > 0) {
+    //   const queueService = new PlaceQueueService();
+    //   const queueResults = await queueService.batchMoveToQueue(
+    //     sourceQueue, // Pass the source queue as first parameter
+    //     successfulPNRs,
+    //     undefined, // No target queue override - use default
+    //     5, // Concurrency
+    //   );
 
-      console.log(`[TARGET QUEUE] Operations complete:`, {
-        total: queueResults.length,
-        succeeded: queueResults.filter((r) => r.success).length,
-        failed: queueResults.filter((r) => !r.success).length,
-      });
+    //   console.log(`[TARGET QUEUE] Operations complete:`, {
+    //     total: queueResults.length,
+    //     succeeded: queueResults.filter((r) => r.success).length,
+    //     failed: queueResults.filter((r) => !r.success).length,
+    //   });
 
-      // Log any failures
-      const failedMoves = queueResults.filter((r) => !r.success);
-      if (failedMoves.length > 0) {
-        console.error(
-          `[TARGET QUEUE] Failed to move ${failedMoves.length} PNRs:`,
-          failedMoves,
-        );
-      }
-    }
+    //   // Log any failures
+    //   const failedMoves = queueResults.filter((r) => !r.success);
+    //   if (failedMoves.length > 0) {
+    //     console.error(
+    //       `[TARGET QUEUE] Failed to move ${failedMoves.length} PNRs:`,
+    //       failedMoves,
+    //     );
+    //   }
+    // }
 
-    // Step 4: Move failed PNRs to error queue
-    if (failedPNRs.length > 0) {
-      const queueService = new PlaceQueueService();
-      const errorQueueResults = await queueService.batchMoveToErrorQueue(
-        failedPNRs,
-        "PNR fetch failed during processing",
-        5, // Concurrency
-      );
+    // // Step 4: Move failed PNRs to error queue
+    // if (failedPNRs.length > 0) {
+    //   const queueService = new PlaceQueueService();
+    //   const errorQueueResults = await queueService.batchMoveToErrorQueue(
+    //     failedPNRs,
+    //     "PNR fetch failed during processing",
+    //     5, // Concurrency
+    //   );
 
-      console.log(`[ERROR QUEUE] Operations complete:`, {
-        total: errorQueueResults.length,
-        succeeded: errorQueueResults.filter((r) => r.success).length,
-        failed: errorQueueResults.filter((r) => !r.success).length,
-      });
+    //   console.log(`[ERROR QUEUE] Operations complete:`, {
+    //     total: errorQueueResults.length,
+    //     succeeded: errorQueueResults.filter((r) => r.success).length,
+    //     failed: errorQueueResults.filter((r) => !r.success).length,
+    //   });
 
-      // Log any failures moving to error queue
-      const failedErrorMoves = errorQueueResults.filter((r) => !r.success);
-      if (failedErrorMoves.length > 0) {
-        console.error(
-          `[ERROR QUEUE] Failed to move ${failedErrorMoves.length} PNRs:`,
-          failedErrorMoves,
-        );
-      }
-    }
+    //   // Log any failures moving to error queue
+    //   const failedErrorMoves = errorQueueResults.filter((r) => !r.success);
+    //   if (failedErrorMoves.length > 0) {
+    //     console.error(
+    //       `[ERROR QUEUE] Failed to move ${failedErrorMoves.length} PNRs:`,
+    //       failedErrorMoves,
+    //     );
+    //   }
+    // }
 
     console.log("[FLUSH] Pool stats after:", sabreSessionPool.getStats());
   } catch (error) {

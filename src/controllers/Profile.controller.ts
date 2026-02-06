@@ -6,6 +6,8 @@ import {
 } from "../services/profile/Profile.types";
 import { ProfileService } from "../services/profile/profile.service";
 import { GdsProfileService } from "../services/apex/gdsProfiles.service";
+import { getProfilesFromApexService } from "../services/apex/getProfilesFromApex.service";
+import { profileToSabreFormatter } from "../services/apex/profileToSabreFormatter.service";
 
 export class ProfileController {
   private profileService = ProfileService.getInstance();
@@ -64,14 +66,18 @@ export class ProfileController {
         });
         return;
       }
+      const profileData =
+        await getProfilesFromApexService.getCompleteProfileData(
+          String(profileId),
+        );
 
-      const profile = await this.profileService.getProfileById(
-        String(profileId),
-      );
+      // Get Sabre formatted data
+      const sabreProfile =
+        profileToSabreFormatter.formatToSabreProfile(profileData);
 
       res.status(200).json({
         success: true,
-        data: profile,
+        data: sabreProfile,
       });
     } catch (error: any) {
       logger.error("ProfileController.getProfile error:", error);
@@ -121,44 +127,29 @@ export class ProfileController {
     res: Response,
   ): Promise<void> {
     try {
-      const BATCH_SIZE = 500;
-      let batch: any[] = [];
       let totalProcessed = 0;
 
       logger.info("Starting profile sync from Sabre");
 
       const result = await this.profileService.searchProfilesStreaming(
-        { pageSize: 250, profileName: "B*" },
+        { pageSize: 250, profileName: "*" },
         async (profiles, pageInfo) => {
-          // Add profiles to current batch
-          batch.push(...profiles);
-          totalProcessed += profiles.length;
-
-          logger.info(`Received page ${pageInfo.pageNumber}`, {
+          logger.info(`Processing page ${pageInfo.pageNumber}`, {
             profilesInPage: profiles.length,
-            totalProcessed,
             hasMore: pageInfo.hasMore,
           });
 
-          // Insert batch when it reaches BATCH_SIZE or it's the last page
-          if (batch.length >= BATCH_SIZE || !pageInfo.hasMore) {
-            await this.insertProfilesToDatabase(batch);
+          // 🔒 This blocks next page until DB insert finishes
+          await this.insertProfilesToDatabase(profiles);
 
-            logger.info(`✅ Inserted batch to database`, {
-              batchSize: batch.length,
-              totalProcessed,
-            });
+          totalProcessed += profiles.length;
 
-            batch = []; // Clear batch after insert
-          }
+          logger.info(`✅ Page inserted`, {
+            page: pageInfo.pageNumber,
+            processedSoFar: totalProcessed,
+          });
         },
       );
-
-      // Insert any remaining profiles
-      if (batch.length > 0) {
-        await this.insertProfilesToDatabase(batch);
-        logger.info(`✅ Inserted final batch`, { batchSize: batch.length });
-      }
 
       res.status(200).json({
         success: true,
