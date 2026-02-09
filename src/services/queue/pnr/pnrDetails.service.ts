@@ -285,8 +285,6 @@ export class PnrDetailsService extends ProfilesBaseService {
       hotelInfo: parsedData.hotels || [],
       rawData: response,
       timestamp: new Date().toISOString(),
-      travelers: parsedData.passengers || [],
-      trips: parsedData.trip || null,
       ...parsedData,
     };
 

@@ -953,6 +953,24 @@ export class ComprehensivePNRParser {
     const firstName = pax["stl19:FirstName"] || pax.FirstName || "";
     const lastName = pax["stl19:LastName"] || pax.LastName || "";
     
+    // Get passenger identifiers for association matching
+    const passengerId = attrs.id || "";
+    const passengerNameId = attrs.nameId || "";
+    const passengerNameAssocId = attrs.nameAssocId || "";
+    const passengerNameNumber = attrs.nameNumber || "";
+    
+    // Use the most specific identifier available
+    const primaryIdentifier = passengerNameNumber || passengerNameAssocId || passengerNameId || passengerId;
+    
+    logger.debug("Processing passenger", {
+      name: `${firstName} ${lastName}`,
+      id: passengerId,
+      nameId: passengerNameId,
+      nameAssocId: passengerNameAssocId,
+      nameNumber: passengerNameNumber,
+      primaryIdentifier,
+    });
+    
     // Profile information
     const profiles = this.ensureArray(pax["stl19:Profiles"]?.["stl19:Profile"] || pax.Profiles?.Profile);
     const reservationProfiles = this.ensureArray(
@@ -1015,38 +1033,137 @@ export class ComprehensivePNRParser {
       }
     }
     
-    // Extract emails
+    // ========== EXTRACT EMAILS WITH PASSENGER ASSOCIATION ==========
     const emails: string[] = [];
-    const emailsData = this.ensureArray(
+    
+    // First, try to get passenger-specific emails from the passenger object itself
+    const passengerEmails = this.ensureArray(
+      pax["stl19:EmailAddresses"]?.["stl19:EmailAddress"] ||
+      pax.EmailAddresses?.EmailAddress ||
+      []
+    );
+    
+    for (const email of passengerEmails) {
+      const address = email["stl19:Address"] || email.Address;
+      if (address && !emails.includes(address)) {
+        emails.push(address);
+        logger.debug("Found passenger-specific email", {
+          passenger: `${firstName} ${lastName}`,
+          email: address,
+          source: "passenger object",
+        });
+      }
+    }
+    
+    // Then check reservation-level emails with passenger associations
+    const reservationEmails = this.ensureArray(
       reservation["stl19:EmailAddresses"]?.["stl19:EmailAddress"] ||
       reservation.EmailAddresses?.EmailAddress ||
       []
     );
-    for (const email of emailsData) {
+    
+    for (const email of reservationEmails) {
       const address = email["stl19:Address"] || email.Address;
-      if (address) emails.push(address);
+      const emailAttrs = email.$ || {};
+      
+      // Check various passenger reference fields
+      const nameRefNumber = emailAttrs.nameRefNumber || email["stl19:NameRefNumber"] || email.NameRefNumber;
+      const nameNumber = emailAttrs.nameNumber || email["stl19:NameNumber"] || email.NameNumber;
+      const nameId = emailAttrs.nameId || email["stl19:NameId"] || email.NameId;
+      const nameAssocId = emailAttrs.nameAssocId || email["stl19:NameAssocId"] || email.NameAssocId;
+      
+      // Check if this email is associated with this specific passenger
+      const isAssociated = 
+        nameRefNumber === primaryIdentifier ||
+        nameNumber === primaryIdentifier ||
+        nameId === primaryIdentifier ||
+        nameAssocId === primaryIdentifier ||
+        nameRefNumber === passengerId ||
+        nameNumber === passengerNameNumber ||
+        nameId === passengerNameId ||
+        nameAssocId === passengerNameAssocId;
+      
+      // If no association specified, it's shared across all passengers (legacy format)
+      const hasNoAssociation = !nameRefNumber && !nameNumber && !nameId && !nameAssocId;
+      
+      if (address && !emails.includes(address) && (isAssociated || hasNoAssociation)) {
+        emails.push(address);
+        logger.debug("Found email from reservation", {
+          passenger: `${firstName} ${lastName}`,
+          email: address,
+          isAssociated,
+          hasNoAssociation,
+          nameRefNumber,
+          nameNumber,
+        });
+      }
     }
     
-    // Extract from special requests
+    // Extract from special requests (CTCE - Contact Email)
     for (const sr of specialRequests) {
       const code = sr["stl19:Code"] || sr.Code;
       if (code === "CTCE") {
         const freeText = sr["stl19:FreeText"] || sr.FreeText || "";
         const emailMatch = freeText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        
         if (emailMatch && !emails.includes(emailMatch[1])) {
           emails.push(emailMatch[1]);
+          logger.debug("Found email from CTCE special request", {
+            passenger: `${firstName} ${lastName}`,
+            email: emailMatch[1],
+          });
         }
       }
     }
     
-    // Extract phones
-    const phones: PhoneNumber[] = [];
-    const phonesData = this.ensureArray(
-      reservation["stl19:PhoneNumbers"]?.["stl19:PhoneNumber"] ||
-      reservation.PhoneNumbers?.PhoneNumber ||
+    // Also check reservation-level special requests with passenger associations
+    const reservationSpecialRequests = this.ensureArray(
+      reservation["stl19:SpecialRequests"]?.["stl19:GenericSpecialRequest"] ||
+      reservation.SpecialRequests?.GenericSpecialRequest ||
+      reservation["stl19:GenericSpecialRequests"] ||
+      reservation.GenericSpecialRequests ||
       []
     );
-    for (const phone of phonesData) {
+    
+    for (const sr of reservationSpecialRequests) {
+      const code = sr["stl19:Code"] || sr.Code;
+      if (code === "CTCE") {
+        const srAttrs = sr.$ || {};
+        const nameNumber = srAttrs.nameNumber || sr["stl19:NameNumber"] || sr.NameNumber;
+        const nameRefNumber = srAttrs.nameRefNumber || sr["stl19:NameRefNumber"] || sr.NameRefNumber;
+        
+        const isAssociated = 
+          nameNumber === passengerNameNumber ||
+          nameRefNumber === primaryIdentifier ||
+          (!nameNumber && !nameRefNumber); // No association means shared
+        
+        if (isAssociated) {
+          const freeText = sr["stl19:FreeText"] || sr.FreeText || "";
+          const emailMatch = freeText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+          
+          if (emailMatch && !emails.includes(emailMatch[1])) {
+            emails.push(emailMatch[1]);
+            logger.debug("Found email from reservation CTCE", {
+              passenger: `${firstName} ${lastName}`,
+              email: emailMatch[1],
+              nameNumber,
+            });
+          }
+        }
+      }
+    }
+    
+    // ========== EXTRACT PHONES WITH PASSENGER ASSOCIATION ==========
+    const phones: PhoneNumber[] = [];
+    
+    // First, try passenger-specific phones
+    const passengerPhones = this.ensureArray(
+      pax["stl19:PhoneNumbers"]?.["stl19:PhoneNumber"] ||
+      pax.PhoneNumbers?.PhoneNumber ||
+      []
+    );
+    
+    for (const phone of passengerPhones) {
       const number = phone["stl19:Number"] || phone.Number || "";
       const parts = number.split("-");
       phones.push({
@@ -1056,32 +1173,108 @@ export class ComprehensivePNRParser {
         type: parts[parts.length - 1] || "O",
         cityCode: phone["stl19:CityCode"] || phone.CityCode,
         number: parts[0] || number,
+        countryCode: phone["stl19:CountryCode"] || phone.CountryCode,
+        extension: phone["stl19:Extension"] || phone.Extension,
       });
     }
     
-    // Extract from CTCM
+    // Then check reservation-level phones with associations
+    const reservationPhones = this.ensureArray(
+      reservation["stl19:PhoneNumbers"]?.["stl19:PhoneNumber"] ||
+      reservation.PhoneNumbers?.PhoneNumber ||
+      []
+    );
+    
+    for (const phone of reservationPhones) {
+      const phoneAttrs = phone.$ || {};
+      const nameRefNumber = phoneAttrs.nameRefNumber || phone["stl19:NameRefNumber"] || phone.NameRefNumber;
+      const nameNumber = phoneAttrs.nameNumber || phone["stl19:NameNumber"] || phone.NameNumber;
+      const nameId = phoneAttrs.nameId || phone["stl19:NameId"] || phone.NameId;
+      
+      const isAssociated = 
+        nameRefNumber === primaryIdentifier ||
+        nameNumber === passengerNameNumber ||
+        nameId === passengerNameId ||
+        (!nameRefNumber && !nameNumber && !nameId);
+      
+      if (isAssociated) {
+        const number = phone["stl19:Number"] || phone.Number || "";
+        const parts = number.split("-");
+        
+        // Check if this phone is already added
+        const phoneExists = phones.some(p => p.number === (parts[0] || number));
+        
+        if (!phoneExists) {
+          phones.push({
+            id: phoneAttrs.id,
+            elementId: phoneAttrs.elementId,
+            index: phoneAttrs.index,
+            type: parts[parts.length - 1] || "O",
+            cityCode: phone["stl19:CityCode"] || phone.CityCode,
+            number: parts[0] || number,
+            countryCode: phone["stl19:CountryCode"] || phone.CountryCode,
+            extension: phone["stl19:Extension"] || phone.Extension,
+          });
+        }
+      }
+    }
+    
+    // Extract from CTCM (Contact Mobile) special requests
     for (const sr of specialRequests) {
       const code = sr["stl19:Code"] || sr.Code;
       if (code === "CTCM") {
         const freeText = sr["stl19:FreeText"] || sr.FreeText || "";
         const phoneMatch = freeText.match(/\/(\d+)/);
         if (phoneMatch) {
-          phones.push({
-            type: "C",
-            number: phoneMatch[1],
-          });
+          const phoneExists = phones.some(p => p.number === phoneMatch[1]);
+          if (!phoneExists) {
+            phones.push({
+              type: "C",
+              number: phoneMatch[1],
+            });
+          }
         }
       }
     }
     
-    // Extract addresses
+    // Check reservation-level CTCM with associations
+    for (const sr of reservationSpecialRequests) {
+      const code = sr["stl19:Code"] || sr.Code;
+      if (code === "CTCM") {
+        const srAttrs = sr.$ || {};
+        const nameNumber = srAttrs.nameNumber || sr["stl19:NameNumber"] || sr.NameNumber;
+        
+        const isAssociated = 
+          nameNumber === passengerNameNumber ||
+          !nameNumber;
+        
+        if (isAssociated) {
+          const freeText = sr["stl19:FreeText"] || sr.FreeText || "";
+          const phoneMatch = freeText.match(/\/(\d+)/);
+          if (phoneMatch) {
+            const phoneExists = phones.some(p => p.number === phoneMatch[1]);
+            if (!phoneExists) {
+              phones.push({
+                type: "C",
+                number: phoneMatch[1],
+              });
+            }
+          }
+        }
+      }
+    }
+    
+    // ========== EXTRACT ADDRESSES WITH PASSENGER ASSOCIATION ==========
     const addresses: Address[] = [];
-    const addressesData = this.ensureArray(
-      reservation["stl19:Addresses"]?.["stl19:Address"] ||
-      reservation.Addresses?.Address ||
+    
+    // First, try passenger-specific addresses
+    const passengerAddresses = this.ensureArray(
+      pax["stl19:Addresses"]?.["stl19:Address"] ||
+      pax.Addresses?.Address ||
       []
     );
-    for (const addr of addressesData) {
+    
+    for (const addr of passengerAddresses) {
       const addressLines = this.ensureArray(
         addr["stl19:AddressLines"]?.["stl19:AddressLine"] ||
         addr.AddressLines?.AddressLine ||
@@ -1089,11 +1282,64 @@ export class ComprehensivePNRParser {
       );
       addresses.push({
         id: addr.$?.id,
-        type: addr.$?.type || "O",
+        type: addr.$?.type || addr["stl19:Type"] || addr.Type || "O",
         addressLines: addressLines.map((line: any) => 
           line["stl19:Text"] || line.Text || line
         ).filter(Boolean),
+        city: addr["stl19:CityName"] || addr.CityName,
+        state: addr["stl19:StateCode"] || addr.StateCode,
+        postalCode: addr["stl19:PostalCode"] || addr.PostalCode,
+        countryCode: addr["stl19:CountryCode"] || addr.CountryCode,
       });
+    }
+    
+    // Then check reservation-level addresses with associations
+    const reservationAddresses = this.ensureArray(
+      reservation["stl19:Addresses"]?.["stl19:Address"] ||
+      reservation.Addresses?.Address ||
+      []
+    );
+    
+    for (const addr of reservationAddresses) {
+      const addrAttrs = addr.$ || {};
+      const nameRefNumber = addrAttrs.nameRefNumber || addr["stl19:NameRefNumber"] || addr.NameRefNumber;
+      const nameNumber = addrAttrs.nameNumber || addr["stl19:NameNumber"] || addr.NameNumber;
+      const nameId = addrAttrs.nameId || addr["stl19:NameId"] || addr.NameId;
+      
+      const isAssociated = 
+        nameRefNumber === primaryIdentifier ||
+        nameNumber === passengerNameNumber ||
+        nameId === passengerNameId ||
+        (!nameRefNumber && !nameNumber && !nameId);
+      
+      if (isAssociated) {
+        const addressLines = this.ensureArray(
+          addr["stl19:AddressLines"]?.["stl19:AddressLine"] ||
+          addr.AddressLines?.AddressLine ||
+          []
+        );
+        
+        // Check if this address is already added (simple check by first line)
+        const firstLine = addressLines.map((line: any) => 
+          line["stl19:Text"] || line.Text || line
+        ).filter(Boolean)[0];
+        
+        const addressExists = addresses.some(a => a.addressLines[0] === firstLine);
+        
+        if (!addressExists) {
+          addresses.push({
+            id: addrAttrs.id,
+            type: addrAttrs.type || addr["stl19:Type"] || addr.Type || "O",
+            addressLines: addressLines.map((line: any) => 
+              line["stl19:Text"] || line.Text || line
+            ).filter(Boolean),
+            city: addr["stl19:CityName"] || addr.CityName,
+            state: addr["stl19:StateCode"] || addr.StateCode,
+            postalCode: addr["stl19:PostalCode"] || addr.PostalCode,
+            countryCode: addr["stl19:CountryCode"] || addr.CountryCode,
+          });
+        }
+      }
     }
     
     // Extract seats
@@ -1158,6 +1404,14 @@ export class ComprehensivePNRParser {
     
     // Emergency contacts (extract from remarks)
     const emergencyContacts: EmergencyContact[] = [];
+    
+    // Log final passenger contact summary
+    logger.debug("Passenger contact info extracted", {
+      passenger: `${firstName} ${lastName}`,
+      emailCount: emails.length,
+      phoneCount: phones.length,
+      addressCount: addresses.length,
+    });
     
     return {
       id: attrs.id || "",

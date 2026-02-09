@@ -191,10 +191,9 @@ export class QueueProcessor {
     processCallback: ProcessCallback | null | undefined,
     config: typeof QueueProcessConfig,
   ): Promise<void> {
-    const maxIterations = Math.min(config.MAX_ITERATIONS, state.totalItems);
 
     // Start from position 2 (first item already processed)
-    for (let position = 2; position <= maxIterations; position++) {
+    for (let position = 2;; position++) {
       // Check if we should stop
       if (state.isEnded) {
         console.log(

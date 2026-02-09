@@ -24,16 +24,49 @@ export class DeleteProfileService extends ProfilesBaseService {
     return DeleteProfileService.instance;
   }
 
-  async deleteProfile(profileId: string) {
-    const requestObj = this.profileBuilder.buildDeleteRequest(
+  private buildDeleteRequest(
+    profileId: string,
+    domainId: string,
+    clientCode: string,
+    clientContext: string,
+  ): any {
+    return {
+      Sabre_OTA_ProfileDeleteRQ: {
+        $: {
+          Version: "6.99.2",
+          xmlns: "http://www.sabre.com/eps/schemas",
+        },
+        Delete: {
+          Profile: {
+            $: {
+              PurgeDays: "0",
+            },
+            TPA_Identity: {
+              $: {
+                UniqueID: profileId,
+                DomainID: domainId,
+                ClientCode: clientCode,
+                ClientContextCode: clientContext,
+                ProfileTypeCode: "TVL",
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  async deleteProfile(profileId: string): Promise<void> {
+    const requestObj = this.buildDeleteRequest(
       profileId,
       this.sabreConfig.pcc,
-      this.sabreConfig.clientCode,
-      this.sabreConfig.clientContext,
+      this.sabreConfig.clientCode ?? "TN",
+      this.sabreConfig.clientContext ?? "TMP",
     );
 
     const bodyXml = this.xmlBuilder.buildObject(requestObj);
-    const sessionToken: string = await this.sessionService.getAccessToken();
+    const sessionToken = await this.sessionService.getAccessToken();
+
     await this.soapExecutor.execute<SabreProfileDeleteRS>(
       {
         action: "EPS_EXT_ProfileDeleteRQ",

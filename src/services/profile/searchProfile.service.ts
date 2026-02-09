@@ -287,6 +287,8 @@ export class ProfileSearchService extends ProfilesBaseService {
           ClientCode="${this.sabreConfig.clientCode}" 
           ClientContextCode="${this.sabreConfig.clientContext}" 
         />
+          <ProfileType Code="TVL"/>
+
       </Profile>
     </Sabre_OTA_ProfileReadRQ>
   `;

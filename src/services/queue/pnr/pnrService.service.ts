@@ -42,7 +42,9 @@ export class PnrService extends PnrHelpersService {
 
       // Store PNR record
       const pnrId = await this.upsertPnr(client, data, queue_number);
-      console.log(`PNR record stored with ID: ${pnrId} for PNR: ${data.booking.pnr}`);
+      console.log(
+        `PNR record stored with ID: ${pnrId} for PNR: ${data.booking.pnr}`,
+      );
       // Store trip with primary passenger as creator
       const tripId = await this.upsertTrip(client, data, passengerUsers);
 
@@ -129,7 +131,7 @@ export class PnrService extends PnrHelpersService {
     const organizationId = await this.getOrganizationId(client, createdBy);
 
     // Map status
-    const status = this.mapBookingStatus(trip.status || booking?.status);
+    const status = trip.status || booking?.status;
 
     const res = await client.query(
       `INSERT INTO bookings.trips
@@ -324,18 +326,18 @@ export class PnrService extends PnrHelpersService {
 
     for (const passengerUser of passengerUsers) {
       // If passenger has a profile, link via trip_travelers
-      if (passengerUser.profileId) {
+      if (passengerUser.userId ) {
         await client.query(
           `INSERT INTO bookings.trip_travelers
-           (trip_id, profile_id, is_primary)
+           (trip_id, user_id, is_primary)
            VALUES ($1, $2, $3)
-           ON CONFLICT (trip_id, profile_id) DO UPDATE
+           ON CONFLICT (trip_id, user_id) DO UPDATE
            SET is_primary = EXCLUDED.is_primary`,
-          [tripId, passengerUser.profileId, passengerUser.isPrimary],
+          [tripId, passengerUser.userId , passengerUser.isPrimary],
         );
 
         logger.debug(
-          `Linked profile ${passengerUser.profileId} to trip ${tripId} (primary: ${passengerUser.isPrimary})`,
+          `Linked user ${passengerUser.userId} to trip ${tripId} (primary: ${passengerUser.isPrimary})`,
         );
       } else {
         logger.warn(
