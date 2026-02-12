@@ -5,21 +5,20 @@ import {
 } from "../../../parsers/parsePNRDetails";
 import logger from "../../../utils/logger";
 import { ProfilesBaseService } from "../../profile/profilesBase.service";
-import {
-  CompletePNRData,
-  ComprehensivePNRParser,
-} from "./comprehensive-pnr-parser";
+
 import { sabreSessionPool } from "../../../sessionManagement/sabreSessionPool";
 import { SabreSessionService } from "../../../sessionManagement/sabreSessionService.service";
 import { PnrService } from "./pnrService.service";
+import { CompletePNRData } from "./parser/comprehensive-pnr-parser.types";
+import { parsePNRDetailsParser } from "./parser/comprehensive-pnr-parser";
 
 interface ParsedPNRResult {
   pnrNumber?: string;
   passengerName?: string;
   profileId: string | null;
-  flightInfo: any[];
-  carRentalInfo: any[];
-  hotelInfo: any[];
+  flights: any[];
+  cars: any[];
+  hotels: any[];
   rawData: PNRDataFromParser | ReservationFromParser;
   timestamp: string;
   travelers?: any[];
@@ -212,7 +211,7 @@ export class PnrDetailsService extends ProfilesBaseService {
 
     let parsedData: any;
     try {
-      parsedData = await ComprehensivePNRParser.parse(response);
+      parsedData = await parsePNRDetailsParser(response);
     } catch (error) {
       logger.error("Exception thrown during PNR parsing", {
         pnr: pnrNumber,
@@ -263,26 +262,9 @@ export class PnrDetailsService extends ProfilesBaseService {
       }
     }
 
-    // Extract profile ID from travelers
-    let profileId: string | null = null;
-    if (
-      parsedData.travelers &&
-      Array.isArray(parsedData.travelers) &&
-      parsedData.travelers.length > 0
-    ) {
-      const primaryTraveler =
-        parsedData.travelers.find((t: any) => t.isPrimary) ||
-        parsedData.travelers[0];
-      profileId = primaryTraveler?.profileId || null;
-    }
-
     const result: ParsedPNRResult = {
       pnrNumber: parsedData.pnr || pnrNumber,
       passengerName,
-      profileId,
-      flightInfo: parsedData.flights || [],
-      carRentalInfo: parsedData.cars || [],
-      hotelInfo: parsedData.hotels || [],
       rawData: response,
       timestamp: new Date().toISOString(),
       ...parsedData,
@@ -291,9 +273,9 @@ export class PnrDetailsService extends ProfilesBaseService {
     logger.info("PNR details parsed successfully", {
       pnr: result.pnrNumber,
       passengerName: result.passengerName,
-      flightsCount: result.flightInfo.length,
-      hotelsCount: result.hotelInfo.length,
-      carsCount: result.carRentalInfo.length,
+      flightsCount: result.flights?.length || 0,
+      hotelsCount: result.hotels?.length || 0,
+      carsCount: result.cars?.length || 0,
       travelersCount: result.travelers?.length || 0,
     });
 

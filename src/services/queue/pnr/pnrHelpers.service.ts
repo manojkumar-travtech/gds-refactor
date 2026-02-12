@@ -1,128 +1,136 @@
-import { CompletePNRData } from "./comprehensive-pnr-parser";
+import { PassengerProfile } from "./parser/comprehensive-pnr-parser.types";
 
-export interface PassengerUser {
-  passengerId: string;
-  userId: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  isPrimary: boolean;
-  profileId?: string;
+const BASE_STATUS_MAP: Record<string, string> = {
+  HK: "confirmed",
+  KK: "confirmed",
+  HL: "waitlisted",
+  HN: "needs_confirmation",
+  UC: "unconfirmed",
+  UN: "unable",
+  NO: "no_action",
+  PN: "pending",
+  TK: "ticketed",
+  XX: "cancelled",
+  HX: "cancelled",
+  XL: "cancelled",
+};
 
-}export class PnrHelpersService {
- 
-  protected mapBookingStatus(status: string): string {
-    const statusMap: Record<string, string> = {
-      ticketed: "confirmed",
-      confirmed: "confirmed",
-      booked: "confirmed",
-      pending: "pending",
-      cancelled: "cancelled",
-      draft: "draft",
-      completed: "completed",
-    };
-    return statusMap[status?.toLowerCase()] || "draft";
-  }
+const STATUS_CONFIG = {
+  flight: [
+    "HK",
+    "KK",
+    "HL",
+    "HN",
+    "UC",
+    "UN",
+    "NO",
+    "PN",
+    "TK",
+    "XX",
+    "HX",
+    "XL",
+  ],
+  hotel: ["HK", "KK", "HL", "UC", "XX", "HX"],
+  car: ["HK", "KK", "UC", "XX", "HX"],
+} as const;
 
-  protected mapFlightStatus(status: string): string {
-    const statusMap: Record<string, string> = {
-      HK: "confirmed",
-      KK: "confirmed",
-      OK: "confirmed",
-      UN: "pending",
-      UC: "pending",
-      XX: "cancelled",
-      HX: "cancelled",
-    };
-    return statusMap[status] || "booked";
-  }
-
-  protected mapHotelStatus(status: string): string {
-    const statusMap: Record<string, string> = {
-      HK: "confirmed",
-      GK: "confirmed",
-      OK: "confirmed",
-      UC: "pending",
-      XX: "cancelled",
-    };
-    return statusMap[status] || "booked";
-  }
-
-  protected mapCarStatus(status: string): string {
-    const statusMap: Record<string, string> = {
-      HK: "confirmed",
-      GK: "confirmed",
-      OK: "confirmed",
-      UC: "pending",
-      XX: "cancelled",
-    };
-    return statusMap[status] || "booked";
-  }
-
+export class PnrHelpersService {
+  /**
+   * Build trip notes from passenger data
+   */
   protected buildTripNotes(
-    data: CompletePNRData,
-    passengerUsers: PassengerUser[],
+    data: any,
+    passengerProfiles: PassengerProfile[],
   ): string {
     const notes: string[] = [];
-    
-    if (data.booking?.receivedFrom) {
-      notes.push(`Received from: ${data.booking.receivedFrom}`);
-    }
-    
-    if (data.trip?.purpose?.description) {
-      notes.push(data.trip.purpose.description);
+
+    // Primary traveler
+    const primaryProfile =
+      passengerProfiles.find((p) => p.isPrimary) || passengerProfiles[0];
+
+    if (primaryProfile) {
+      notes.push(
+        `Primary Traveler: ${primaryProfile.firstName} ${primaryProfile.lastName}`,
+      );
     }
 
-    if (data.trip?.approval?.approver) {
-      notes.push(`Approver: ${data.trip.approval.approver}`);
-    }
-
-    // Add traveler information
-    if (passengerUsers.length > 1) {
-      const travelerNames = passengerUsers
-        .map(p => `${p.firstName} ${p.lastName}`)
+    // Additional travelers
+    if (passengerProfiles.length > 1) {
+      const otherTravelers = passengerProfiles
+        .filter((p) => !p.isPrimary)
+        .map((p) => `${p.firstName} ${p.lastName}`)
         .join(", ");
-      notes.push(`Travelers (${passengerUsers.length}): ${travelerNames}`);
+
+      if (otherTravelers) {
+        notes.push(`Additional Travelers: ${otherTravelers}`);
+      }
     }
-    
+
+    // PNR info
+    if (data.booking?.pnr) {
+      notes.push(`PNR: ${data.booking.pnr}`);
+    }
+
+    if (data.booking?.createdBy) {
+      notes.push(`Created by: ${data.booking.createdBy}`);
+    }
+
     return notes.join("\n");
   }
 
   protected buildTripMetadata(
-    data: CompletePNRData,
-    passengerUsers: PassengerUser[],
+    data: any,
+    passengerProfiles: PassengerProfile[],
   ): any {
+    const totalPassengers = data.passengers?.length || 0;
+    const emailsFound = passengerProfiles.filter((p) => p.email).length;
+
     return {
-      pnrData: {
-        createdDate: data.booking?.createdDate,
-        lastModifiedDate: data.booking?.lastModifiedDate,
-        agencyPCC: data.booking?.agencyPCC,
-        bookingSource: data.booking?.bookingSource,
-        pnrSequence: data.booking?.pnrSequence,
-      },
-      tripDetails: {
-        cities: data.trip?.cities || [],
-        countries: data.trip?.countries || [],
-        segments: data.trip?.segments,
-        hotelSummary: data.trip?.hotelSummary,
-        carSummary: data.trip?.carSummary,
-      },
-      travelers: passengerUsers.map(p => ({
-        userId: p.userId,
+      parser_version: data.parserVersion || "2.1.0",
+      passengers: passengerProfiles.map((p) => ({
+        profile_id: p.profileId,
+        gds_profile_id: p.gdsProfileId,
+        name: `${p.firstName} ${p.lastName}`,
         email: p.email,
-        firstName: p.firstName,
-        lastName: p.lastName,
-        isPrimary: p.isPrimary,
-        profileId: p.profileId,
+        is_primary: p.isPrimary,
       })),
-      pricing: data.pricing,
-      itineraryRemarks: data.remarks
-        ?.filter(r => r.type === "ITINERARY")
-        .map(r => r.text),
-      inPolicy: data.trip?.inPolicy,
-      policyViolations: data.trip?.policyViolations,
-      parserVersion: data.parserVersion,
-      parsedAt: data.parsedAt,
+      email_extraction: {
+        total_passengers: totalPassengers,
+        emails_found: emailsFound,
+        emails_missing: totalPassengers - emailsFound,
+      },
+      booking_details: {
+        pnr: data.booking?.pnr,
+        created_date: data.booking?.createdDate,
+        agency_pcc: data.booking?.agencyPCC,
+        ticketed: data.booking?.ticketed,
+      },
+      segments: {
+        flights: data.flights?.length || 0,
+        hotels: data.hotels?.length || 0,
+        cars: data.cars?.length || 0,
+      },
     };
+  }
+
+  protected mapStatus(status: string, allowedCodes: readonly string[]): string {
+    const code = status?.toUpperCase();
+    if (!code || !allowedCodes.includes(code)) {
+      return "unknown";
+    }
+
+    return BASE_STATUS_MAP[code] || "unknown";
+  }
+
+  protected mapFlightStatus(status: string): string {
+    return this.mapStatus(status, STATUS_CONFIG.flight);
+  }
+
+  protected mapHotelStatus(status: string): string {
+    return this.mapStatus(status, STATUS_CONFIG.hotel);
+  }
+
+  protected mapCarStatus(status: string): string {
+    return this.mapStatus(status, STATUS_CONFIG.car);
   }
 }
